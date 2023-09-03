@@ -12,7 +12,7 @@ bench-result:
         mkdir -p alp/dump
         cat /var/log/nginx/access.log \
         | alp ltsv \
-        -m '/api/organizer/player/[0-9a-z]+/disqualified$$,/api/organizer/competition/[0-9a-z]+/finish$$,/api/organizer/competition/[0-9a-z]+/score$$,/api/player/competition/[0-9a-z]+/ranking$$' \
+        -m '/api/organizer/player/[0-9a-z]+/disqualified$$,/api/organizer/competition/[0-9a-z]+/finish$$,/api/organizer/competition/[0-9a-z]+/score$$,/api/player/competition/[0-9a-z]+/ranking$$,/api/player/player/[0-9a-z]+$$' \
                 --sort avg -r --dump alp/dump/`git show --format='%h' --no-patch` > /dev/null
 
 latest-alp:
