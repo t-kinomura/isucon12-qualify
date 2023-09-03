@@ -4,7 +4,7 @@ DROP TABLE IF EXISTS `tenant`;
 DROP TABLE IF EXISTS `id_generator`;
 DROP TABLE IF EXISTS `visit_history`;
 
-// sqliteだったやつ
+-- sqliteだったやつ
 DROP TABLE IF EXISTS competition;
 DROP TABLE IF EXISTS player;
 DROP TABLE IF EXISTS player_score;
@@ -36,7 +36,7 @@ CREATE TABLE `visit_history` (
   INDEX `tenant_id_idx` (`tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4;
 
-// sqliteだったやつ
+-- sqliteだったやつ
 CREATE TABLE competition (
   id VARCHAR(255) NOT NULL PRIMARY KEY,
   tenant_id BIGINT NOT NULL,
