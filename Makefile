@@ -5,6 +5,7 @@ deploy:
 bench-prepare:
 	sudo rm -f /var/log/nginx/access.log
 	sudo systemctl reload nginx.service
+	time mysql -uroot -proot isuports < ~/dump/initial_data_dump.txt
 	sudo rm -f /var/log/mysql/mysql-slow.log
 	sudo systemctl restart mysql.service
 
