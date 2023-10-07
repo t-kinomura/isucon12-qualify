@@ -1,5 +1,7 @@
 deploy:
 	cp -r ./webapp/go ../webapp
+	cp ./webapp/sql/init.sh ../webapp/sql/init.sh
+	cp ./webapp/sql/init.sql ../webapp/sql/init.sql
 	sudo systemctl restart isuports.service
 
 bench-prepare:
