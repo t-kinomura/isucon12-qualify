@@ -1563,6 +1563,78 @@ func initializeHandler(c echo.Context) error {
 	if err != nil {
 		return fmt.Errorf("error exec.Command: %s %e", string(out), err)
 	}
+	// 終了済みの大会の参加者と訪問者の人数を計算して書き込む
+	ctx := context.Background()
+	cs := []CompetitionRow{}
+	if err := adminDB.SelectContext(
+		ctx,
+		&cs,
+		"SELECT * FROM competition WHERE finished_at is not null",
+	); err != nil {
+		return fmt.Errorf("failed to Select competition: %w", err)
+	}
+	for _, comp := range cs {
+		// ランキングにアクセスした参加者のIDを取得する
+		vhs := []VisitHistorySummaryRow{}
+		if err := adminDB.SelectContext(
+			ctx,
+			&vhs,
+			"SELECT player_id, MIN(created_at) AS min_created_at FROM visit_history WHERE tenant_id = ? AND competition_id = ? GROUP BY player_id",
+			comp.TenantID,
+			comp.ID,
+		); err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("error Select visit_history: tenantID=%d, competitionID=%s, %w", comp.TenantID, comp.ID, err)
+		}
+		billingMap := map[string]string{}
+		for _, vh := range vhs {
+			// competition.finished_atよりもあとの場合は、終了後に訪問したとみなして大会開催内アクセス済みとみなさない
+			if comp.FinishedAt.Valid && comp.FinishedAt.Int64 < vh.MinCreatedAt {
+				continue
+			}
+			billingMap[vh.PlayerID] = "visitor"
+		}
+
+		// intializeなのでflockは取らない
+
+		// スコアを登録した参加者のIDを取得する
+		scoredPlayerIDs := []string{}
+		if err := adminDB.SelectContext(
+			ctx,
+			&scoredPlayerIDs,
+			"SELECT DISTINCT(player_id) FROM player_score WHERE tenant_id = ? AND competition_id = ?",
+			comp.TenantID, comp.ID,
+		); err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("error Select count player_score: tenantID=%d, competitionID=%s, %w", comp.TenantID, comp.ID, err)
+		}
+		for _, pid := range scoredPlayerIDs {
+			// スコアが登録されている参加者
+			billingMap[pid] = "player"
+		}
+
+		// 大会が終了している場合のみ請求金額が確定するので計算する
+		var playerCount, visitorCount int64
+		if comp.FinishedAt.Valid {
+			for _, category := range billingMap {
+				switch category {
+				case "player":
+					playerCount++
+				case "visitor":
+					visitorCount++
+				}
+			}
+		}
+
+		if _, err := adminDB.ExecContext(
+			ctx,
+			"UPDATE competition SET player_count = ?, visitor_count = ? WHERE id = ?",
+			playerCount, visitorCount, comp.ID,
+		); err != nil {
+			return fmt.Errorf(
+				"error Update competition: id=%s, %w",
+				comp.ID, err,
+			)
+		}
+	}
 	res := InitializeHandlerResult{
 		Lang: "go",
 	}
