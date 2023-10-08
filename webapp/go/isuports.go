@@ -70,7 +70,6 @@ func connectAdminDB() (*sqlx.DB, error) {
 	return sqlx.Open("mysql", dsn)
 }
 
-
 // システム全体で一意なIDを生成する
 func dispenseID(ctx context.Context) (string, error) {
 	var id int64
@@ -367,12 +366,14 @@ func authorizePlayer(ctx context.Context, id string) error {
 }
 
 type CompetitionRow struct {
-	TenantID   int64         `db:"tenant_id"`
-	ID         string        `db:"id"`
-	Title      string        `db:"title"`
-	FinishedAt sql.NullInt64 `db:"finished_at"`
-	CreatedAt  int64         `db:"created_at"`
-	UpdatedAt  int64         `db:"updated_at"`
+	TenantID     int64         `db:"tenant_id"`
+	ID           string        `db:"id"`
+	Title        string        `db:"title"`
+	FinishedAt   sql.NullInt64 `db:"finished_at"`
+	PlayerCount  int64         `db:"player_count"`
+	VisitorCount int64         `db:"visitor_count"`
+	CreatedAt    int64         `db:"created_at"`
+	UpdatedAt    int64         `db:"updated_at"`
 }
 
 // 大会を取得する
@@ -640,11 +641,6 @@ func tenantsBillingHandler(c echo.Context) error {
 				Name:        t.Name,
 				DisplayName: t.DisplayName,
 			}
-			// tenantDB, err := connectToTenantDB(t.ID)
-			// if err != nil {
-			// 	return fmt.Errorf("failed to connectToTenantDB: %w", err)
-			// }
-			// defer tenantDB.Close()
 			cs := []CompetitionRow{}
 			if err := adminDB.SelectContext(
 				ctx,
@@ -655,7 +651,7 @@ func tenantsBillingHandler(c echo.Context) error {
 				return fmt.Errorf("failed to Select competition: %w", err)
 			}
 			for _, comp := range cs {
-				report, err := billingReportByCompetition(ctx,t.ID, comp.ID)
+				report, err := billingReportByCompetition(ctx, t.ID, comp.ID)
 				if err != nil {
 					return fmt.Errorf("failed to billingReportByCompetition: %w", err)
 				}
@@ -906,16 +902,73 @@ func competitionFinishHandler(c echo.Context) error {
 	}
 
 	now := time.Now().Unix()
+
+	// 大会が終了したので参加者と訪問者の人数を記録する
+	// ランキングにアクセスした参加者のIDを取得する
+	vhs := []VisitHistorySummaryRow{}
+	if err := adminDB.SelectContext(
+		ctx,
+		&vhs,
+		"SELECT player_id, MIN(created_at) AS min_created_at FROM visit_history WHERE tenant_id = ? AND competition_id = ? GROUP BY player_id",
+		v.tenantID,
+		id,
+	); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("error Select visit_history: tenantID=%d, competitionID=%s, %w", v.tenantID, id, err)
+	}
+	billingMap := map[string]string{}
+	for _, vh := range vhs {
+		// competition.finished_atよりもあとの場合は、終了後に訪問したとみなして大会開催内アクセス済みとみなさない
+		// この処理はここ（大会終了時）でやるならいらないはず
+		// if comp.FinishedAt.Valid && comp.FinishedAt.Int64 < vh.MinCreatedAt {
+		// 	continue
+		// }
+		billingMap[vh.PlayerID] = "visitor"
+	}
+
+	// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
+	// 一旦コメントアウトしておく
+	// fl, err := flockByTenantID(tenantID)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("error flockByTenantID: %w", err)
+	// }
+	// defer fl.Close()
+
+	// スコアを登録した参加者のIDを取得する
+	scoredPlayerIDs := []string{}
+	if err := adminDB.SelectContext(
+		ctx,
+		&scoredPlayerIDs,
+		"SELECT DISTINCT(player_id) FROM player_score WHERE tenant_id = ? AND competition_id = ?",
+		v.tenantID, id,
+	); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("error Select count player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, id, err)
+	}
+	for _, pid := range scoredPlayerIDs {
+		// スコアが登録されている参加者
+		billingMap[pid] = "player"
+	}
+
+	// 大会が終了している場合のみ請求金額が確定するので計算する
+	var playerCount, visitorCount int64
+	for _, category := range billingMap {
+		switch category {
+		case "player":
+			playerCount++
+		case "visitor":
+			visitorCount++
+		}
+	}
 	if _, err := adminDB.ExecContext(
 		ctx,
-		"UPDATE competition SET finished_at = ?, updated_at = ? WHERE id = ?",
-		now, now, id,
+		"UPDATE competition SET finished_at = ?, updated_at = ?, player_count = ?, visitor_count = ? WHERE id = ?",
+		now, now, playerCount, visitorCount, id,
 	); err != nil {
 		return fmt.Errorf(
 			"error Update competition: finishedAt=%d, updatedAt=%d, id=%s, %w",
 			now, now, id, err,
 		)
 	}
+
 	return c.JSON(http.StatusOK, SuccessResult{Status: true})
 }
 
@@ -1048,7 +1101,6 @@ func competitionScoreHandler(c echo.Context) error {
 				"error Insert player_score: id=%s, tenant_id=%d, playerID=%s, competitionID=%s, score=%d, rowNum=%d, createdAt=%d, updatedAt=%d, %w",
 				ps.ID, ps.TenantID, ps.PlayerID, ps.CompetitionID, ps.Score, ps.RowNum, ps.CreatedAt, ps.UpdatedAt, err,
 			)
-
 		}
 	}
 
