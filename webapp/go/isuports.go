@@ -766,33 +766,33 @@ func playersAddHandler(c echo.Context) error {
 	}
 	displayNames := params["display_name[]"]
 
+	valueStrings := make([]string, 0, len(displayNames))
+	valueArgs := make([]interface{}, 0, len(displayNames)*8)
+	now := time.Now().Unix()
 	pds := make([]PlayerDetail, 0, len(displayNames))
-	for _, displayName := range displayNames {
+	for _, name := range displayNames {
+		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?)")
 		id, err := dispenseID(ctx)
 		if err != nil {
 			return fmt.Errorf("error dispenseID: %w", err)
 		}
+		valueArgs = append(valueArgs, id)
+		valueArgs = append(valueArgs, v.tenantID)
+		valueArgs = append(valueArgs, name)
+		valueArgs = append(valueArgs, false)
+		valueArgs = append(valueArgs, now)
+		valueArgs = append(valueArgs, now)
 
-		now := time.Now().Unix()
-		if _, err := adminDB.ExecContext(
-			ctx,
-			"INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-			id, v.tenantID, displayName, false, now, now,
-		); err != nil {
-			return fmt.Errorf(
-				"error Insert player at tenantDB: id=%s, displayName=%s, isDisqualified=%t, createdAt=%d, updatedAt=%d, %w",
-				id, displayName, false, now, now, err,
-			)
-		}
-		p, err := retrievePlayer(ctx, id)
-		if err != nil {
-			return fmt.Errorf("error retrievePlayer: %w", err)
-		}
 		pds = append(pds, PlayerDetail{
-			ID:             p.ID,
-			DisplayName:    p.DisplayName,
-			IsDisqualified: p.IsDisqualified,
+			ID:             id,
+			DisplayName:    name,
+			IsDisqualified: false,
 		})
+	}
+	stmt := fmt.Sprintf("INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES %s",
+		strings.Join(valueStrings, ","))
+	if _, err := adminDB.Exec(stmt, valueArgs...); err != nil {
+		return fmt.Errorf("error bulk insert player_scores: %w", err)
 	}
 
 	res := PlayersAddHandlerResult{
