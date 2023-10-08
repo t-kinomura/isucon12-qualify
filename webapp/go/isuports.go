@@ -651,9 +651,14 @@ func tenantsBillingHandler(c echo.Context) error {
 				return fmt.Errorf("failed to Select competition: %w", err)
 			}
 			for _, comp := range cs {
-				report, err := billingReportByCompetition(ctx, t.ID, comp.ID)
-				if err != nil {
-					return fmt.Errorf("failed to billingReportByCompetition: %w", err)
+				report := &BillingReport{
+					CompetitionID:     comp.ID,
+					CompetitionTitle:  comp.Title,
+					PlayerCount:       comp.PlayerCount,
+					VisitorCount:      comp.VisitorCount,
+					BillingPlayerYen:  100 * comp.PlayerCount, // スコアを登録した参加者は100円
+					BillingVisitorYen: 10 * comp.VisitorCount, // ランキングを閲覧だけした(スコアを登録していない)参加者は10円
+					BillingYen:        100*comp.PlayerCount + 10*comp.VisitorCount,
 				}
 				tb.BillingYen += report.BillingYen
 			}
