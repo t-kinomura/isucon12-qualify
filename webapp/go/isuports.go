@@ -1430,6 +1430,9 @@ func competitionRankingHandler(c echo.Context) error {
 			},
 		}, nil
 	})
+	if err != nil {
+		return err
+	}
 	return c.JSON(http.StatusOK, ranking)
 }
 
