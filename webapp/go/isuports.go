@@ -396,6 +396,19 @@ type PlayerScoreRow struct {
 	UpdatedAt     int64  `db:"updated_at"`
 }
 
+type PlayerScorePlayerRow struct {
+	TenantID      int64  `db:"tenant_id"`
+	ID            string `db:"id"`
+	PlayerID      string `db:"player_id"`
+	CompetitionID string `db:"competition_id"`
+	Score         int64  `db:"score"`
+	RowNum        int64  `db:"row_num"`
+	DisplayName   string `db:"display_name"`
+	CreatedAt     int64  `db:"created_at"`
+	UpdatedAt     int64  `db:"updated_at"`
+}
+
+
 // 排他ロックのためのファイル名を生成する
 func lockFilePath(id int64) string {
 	tenantDBDir := getEnv("ISUCON_TENANT_DB_DIR", "../tenant_db")
@@ -1052,7 +1065,7 @@ func competitionScoreHandler(c echo.Context) error {
 	}
 	defer fl.Close()
 	var rowNum int64
-	playerScoreRows := []PlayerScoreRow{}
+	playerScoreRows := map[string]PlayerScoreRow{}
 	for {
 		rowNum++
 		row, err := r.Read()
@@ -1088,7 +1101,7 @@ func competitionScoreHandler(c echo.Context) error {
 			return fmt.Errorf("error dispenseID: %w", err)
 		}
 		now := time.Now().Unix()
-		playerScoreRows = append(playerScoreRows, PlayerScoreRow{
+		playerScoreRows[playerID] = PlayerScoreRow{
 			ID:            id,
 			TenantID:      v.tenantID,
 			PlayerID:      playerID,
@@ -1097,7 +1110,7 @@ func competitionScoreHandler(c echo.Context) error {
 			RowNum:        rowNum,
 			CreatedAt:     now,
 			UpdatedAt:     now,
-		})
+		}
 	}
 
 	if _, err := adminDB.ExecContext(
@@ -1108,17 +1121,23 @@ func competitionScoreHandler(c echo.Context) error {
 	); err != nil {
 		return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
 	}
+	valueStrings := make([]string, 0, len(playerScoreRows))
+	valueArgs := make([]interface{}, 0, len(playerScoreRows)*8)
 	for _, ps := range playerScoreRows {
-		if _, err := adminDB.NamedExecContext(
-			ctx,
-			"INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES (:id, :tenant_id, :player_id, :competition_id, :score, :row_num, :created_at, :updated_at)",
-			ps,
-		); err != nil {
-			return fmt.Errorf(
-				"error Insert player_score: id=%s, tenant_id=%d, playerID=%s, competitionID=%s, score=%d, rowNum=%d, createdAt=%d, updatedAt=%d, %w",
-				ps.ID, ps.TenantID, ps.PlayerID, ps.CompetitionID, ps.Score, ps.RowNum, ps.CreatedAt, ps.UpdatedAt, err,
-			)
-		}
+		valueStrings = append(valueStrings, "(?, ?, ?)")
+		valueArgs = append(valueArgs, ps.ID)
+		valueArgs = append(valueArgs, ps.TenantID)
+		valueArgs = append(valueArgs, ps.PlayerID)
+		valueArgs = append(valueArgs, ps.CompetitionID)
+		valueArgs = append(valueArgs, ps.Score)
+		valueArgs = append(valueArgs, ps.RowNum)
+		valueArgs = append(valueArgs, ps.CreatedAt)
+		valueArgs = append(valueArgs, ps.UpdatedAt)
+	}
+	stmt := fmt.Sprintf("INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES %s",
+		strings.Join(valueStrings, ","))
+	if _, err := adminDB.Exec(stmt, valueArgs...); err != nil {
+			return fmt.Errorf("error bulk insert player_scores")
 	}
 
 	return c.JSON(http.StatusOK, SuccessResult{
@@ -1348,7 +1367,7 @@ func competitionRankingHandler(c echo.Context) error {
 		}
 	}
 
-	pss := []PlayerScoreRow{}
+	pss := []PlayerScorePlayerRow{}
 	err = func() error {
 		// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
 		fl, err := flockByTenantID(v.tenantID)
@@ -1359,7 +1378,7 @@ func competitionRankingHandler(c echo.Context) error {
 		if err := adminDB.SelectContext(
 			ctx,
 			&pss,
-			"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? ORDER BY row_num DESC",
+			"SELECT player_score.*, player.display_name FROM player_score JOIN player on player_score.player_id = player.id WHERE tenant_id = ? AND competition_id = ? ORDER BY row_num DESC",
 			tenant.ID,
 			competitionID,
 		); err != nil {
@@ -1379,14 +1398,10 @@ func competitionRankingHandler(c echo.Context) error {
 			continue
 		}
 		scoredPlayerSet[ps.PlayerID] = struct{}{}
-		p, err := retrievePlayer(ctx, ps.PlayerID)
-		if err != nil {
-			return fmt.Errorf("error retrievePlayer: %w", err)
-		}
 		ranks = append(ranks, CompetitionRank{
 			Score:             ps.Score,
-			PlayerID:          p.ID,
-			PlayerDisplayName: p.DisplayName,
+			PlayerID:          ps.PlayerID,
+			PlayerDisplayName: ps.DisplayName,
 			RowNum:            ps.RowNum,
 		})
 	}
