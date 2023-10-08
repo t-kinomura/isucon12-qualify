@@ -408,7 +408,6 @@ type PlayerScorePlayerRow struct {
 	UpdatedAt     int64  `db:"updated_at"`
 }
 
-
 // 排他ロックのためのファイル名を生成する
 func lockFilePath(id int64) string {
 	tenantDBDir := getEnv("ISUCON_TENANT_DB_DIR", "../tenant_db")
@@ -1137,7 +1136,7 @@ func competitionScoreHandler(c echo.Context) error {
 	stmt := fmt.Sprintf("INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES %s",
 		strings.Join(valueStrings, ","))
 	if _, err := adminDB.Exec(stmt, valueArgs...); err != nil {
-			return fmt.Errorf("error bulk insert player_scores")
+		return fmt.Errorf("error bulk insert player_scores: %w", err)
 	}
 
 	return c.JSON(http.StatusOK, SuccessResult{
