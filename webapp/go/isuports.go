@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gofrs/flock"
@@ -1113,14 +1114,6 @@ func competitionScoreHandler(c echo.Context) error {
 		CSVRows++
 	}
 
-	if _, err := adminDB.ExecContext(
-		ctx,
-		"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
-		v.tenantID,
-		competitionID,
-	); err != nil {
-		return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
-	}
 	valueStrings := make([]string, 0, len(playerScoreRows))
 	valueArgs := make([]interface{}, 0, len(playerScoreRows)*8)
 	for _, ps := range playerScoreRows {
@@ -1136,9 +1129,24 @@ func competitionScoreHandler(c echo.Context) error {
 	}
 	stmt := fmt.Sprintf("INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES %s",
 		strings.Join(valueStrings, ","))
-	if _, err := adminDB.Exec(stmt, valueArgs...); err != nil {
+	tx, err := adminDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
+		v.tenantID,
+		competitionID,
+	); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
+	}
+	if _, err := tx.Exec(stmt, valueArgs...); err != nil {
+		tx.Rollback()
 		return fmt.Errorf("error bulk insert player_scores: %w", err)
 	}
+	tx.Commit()
 
 	return c.JSON(http.StatusOK, SuccessResult{
 		Status: true,
@@ -1326,6 +1334,8 @@ type CompetitionRankingHandlerResult struct {
 	Ranks       []CompetitionRank `json:"ranks"`
 }
 
+var group singleflight.Group
+
 // 参加者向けAPI
 // GET /api/player/competition/:competition_id/ranking
 // 大会ごとのランキングを取得する
@@ -1385,15 +1395,15 @@ func competitionRankingHandler(c echo.Context) error {
 	pss := []PlayerScorePlayerRow{}
 	err = func() error {
 		// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
-		fl, err := flockByTenantID(v.tenantID)
-		if err != nil {
-			return fmt.Errorf("error flockByTenantID: %w", err)
-		}
-		defer fl.Close()
+		// fl, err := flockByTenantID(v.tenantID)
+		// if err != nil {
+		// 	return fmt.Errorf("error flockByTenantID: %w", err)
+		// }
+		// defer fl.Close()
 		if err := adminDB.SelectContext(
 			ctx,
 			&pss,
-			"SELECT player_score.*, player.display_name FROM player_score JOIN player on player_score.player_id = player.id WHERE player_score.tenant_id = ? AND player_score.competition_id = ? ORDER BY player_score.row_num DESC",
+			"SELECT player_score.*, player.display_name FROM player_score JOIN player on player_score.player_id = player.id WHERE player_score.tenant_id = ? AND player_score.competition_id = ?",
 			tenant.ID,
 			competitionID,
 		); err != nil {
