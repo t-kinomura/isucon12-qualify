@@ -1063,7 +1063,7 @@ func competitionScoreHandler(c echo.Context) error {
 		return fmt.Errorf("error flockByTenantID: %w", err)
 	}
 	defer fl.Close()
-	var rowNum int64
+	var rowNum, CSVRows int64
 	playerScoreRows := map[string]PlayerScoreRow{}
 	for {
 		rowNum++
@@ -1110,6 +1110,7 @@ func competitionScoreHandler(c echo.Context) error {
 			CreatedAt:     now,
 			UpdatedAt:     now,
 		}
+		CSVRows++
 	}
 
 	if _, err := adminDB.ExecContext(
@@ -1141,7 +1142,7 @@ func competitionScoreHandler(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, SuccessResult{
 		Status: true,
-		Data:   ScoreHandlerResult{Rows: int64(len(playerScoreRows))},
+		Data:   ScoreHandlerResult{Rows: CSVRows},
 	})
 }
 
