@@ -1256,7 +1256,7 @@ func playerHandler(c echo.Context) error {
 		if err := adminDB.SelectContext(
 			ctx,
 			&css,
-			"SELECT c.title, ps.score FROM competition c JOIN player_score ps on c.id = ps.competition_id WHERE c.tenant_id = ? and ps.player_id = ? ORDER BY created_at ASC",
+			"SELECT c.title, ps.score FROM competition c JOIN player_score ps on c.id = ps.competition_id WHERE c.tenant_id = ? and ps.player_id = ? ORDER BY c.created_at ASC",
 			v.tenantID,
 			p.ID,
 		); err != nil && !errors.Is(err, sql.ErrNoRows) {
