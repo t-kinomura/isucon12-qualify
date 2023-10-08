@@ -1377,7 +1377,7 @@ func competitionRankingHandler(c echo.Context) error {
 		if err := adminDB.SelectContext(
 			ctx,
 			&pss,
-			"SELECT player_score.*, player.display_name FROM player_score JOIN player on player_score.player_id = player.id WHERE tenant_id = ? AND competition_id = ? ORDER BY row_num DESC",
+			"SELECT player_score.*, player.display_name FROM player_score JOIN player on player_score.player_id = player.id WHERE player_score.tenant_id = ? AND player_score.competition_id = ? ORDER BY player_score.row_num DESC",
 			tenant.ID,
 			competitionID,
 		); err != nil {
