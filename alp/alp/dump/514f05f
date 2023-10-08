@@ -1,0 +1,465 @@
+- uri: /initialize
+  count: 1
+  status1xx: 0
+  status2xx: 1
+  status3xx: 0
+  status4xx: 0
+  status5xx: 0
+  method: POST
+  response_time:
+    max: 2.308
+    min: 2.308
+    sum: 2.308
+    usepercentile: true
+    percentiles:
+    - 2.308
+  request_body_bytes:
+    max: 55
+    min: 55
+    sum: 55
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/admin/tenants/add
+  count: 9
+  status1xx: 0
+  status2xx: 4
+  status3xx: 0
+  status4xx: 5
+  status5xx: 0
+  method: POST
+  response_time:
+    max: 0.008
+    min: 0
+    sum: 0.032
+    usepercentile: true
+    percentiles:
+    - 0.004
+    - 0.004
+    - 0.008
+    - 0.008
+    - 0
+    - 0
+    - 0.008
+    - 0
+    - 0
+  request_body_bytes:
+    max: 206
+    min: 39
+    sum: 972
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /index.html
+  count: 1
+  status1xx: 0
+  status2xx: 1
+  status3xx: 0
+  status4xx: 0
+  status5xx: 0
+  method: GET
+  response_time:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: true
+    percentiles:
+    - 0
+  request_body_bytes:
+    max: 479
+    min: 479
+    sum: 479
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /js/app.3a4ec98c.js
+  count: 1
+  status1xx: 0
+  status2xx: 1
+  status3xx: 0
+  status4xx: 0
+  status5xx: 0
+  method: GET
+  response_time:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: true
+    percentiles:
+    - 0
+  request_body_bytes:
+    max: 33296
+    min: 33296
+    sum: 33296
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /css/app.83b4c321.css
+  count: 1
+  status1xx: 0
+  status2xx: 1
+  status3xx: 0
+  status4xx: 0
+  status5xx: 0
+  method: GET
+  response_time:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: true
+    percentiles:
+    - 0
+  request_body_bytes:
+    max: 4868
+    min: 4868
+    sum: 4868
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/organizer/competitions/add
+  count: 4
+  status1xx: 0
+  status2xx: 3
+  status3xx: 0
+  status4xx: 1
+  status5xx: 0
+  method: POST
+  response_time:
+    max: 0.012
+    min: 0.008
+    sum: 0.028
+    usepercentile: true
+    percentiles:
+    - 0.012
+    - 0
+    - 0.008
+    - 0.008
+  request_body_bytes:
+    max: 168
+    min: 39
+    sum: 518
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/player/competitions
+  count: 1
+  status1xx: 0
+  status2xx: 0
+  status3xx: 0
+  status4xx: 1
+  status5xx: 0
+  method: GET
+  response_time:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: true
+    percentiles:
+    - 0
+  request_body_bytes:
+    max: 39
+    min: 39
+    sum: 39
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/organizer/players/add
+  count: 3
+  status1xx: 0
+  status2xx: 3
+  status3xx: 0
+  status4xx: 0
+  status5xx: 0
+  method: POST
+  response_time:
+    max: 0.568
+    min: 0.532
+    sum: 1.6680000000000001
+    usepercentile: true
+    percentiles:
+    - 0.532
+    - 0.568
+    - 0.568
+  request_body_bytes:
+    max: 12171
+    min: 12150
+    sum: 36471
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/organizer/player/[0-9a-z]+/disqualified$
+  count: 3
+  status1xx: 0
+  status2xx: 2
+  status3xx: 0
+  status4xx: 1
+  status5xx: 0
+  method: POST
+  response_time:
+    max: 0.004
+    min: 0.004
+    sum: 0.008
+    usepercentile: true
+    percentiles:
+    - 0
+    - 0.004
+    - 0.004
+  request_body_bytes:
+    max: 157
+    min: 39
+    sum: 353
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/organizer/competition/[0-9a-z]+/score$
+  count: 9
+  status1xx: 0
+  status2xx: 4
+  status3xx: 0
+  status4xx: 5
+  status5xx: 0
+  method: POST
+  response_time:
+    max: 19.272
+    min: 0.004
+    sum: 57.94
+    usepercentile: true
+    percentiles:
+    - 0
+    - 0.004
+    - 0.004
+    - 0
+    - 0.004
+    - 5.756
+    - 13.74
+    - 19.272
+    - 19.16
+  request_body_bytes:
+    max: 62
+    min: 39
+    sum: 432
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/player/player/[0-9a-z]+$
+  count: 4
+  status1xx: 0
+  status2xx: 2
+  status3xx: 0
+  status4xx: 2
+  status5xx: 0
+  method: GET
+  response_time:
+    max: 11.388
+    min: 0.004
+    sum: 20.5
+    usepercentile: true
+    percentiles:
+    - 0.004
+    - 11.388
+    - 4.532
+    - 4.576
+  request_body_bytes:
+    max: 283
+    min: 0
+    sum: 593
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/player/competition/[0-9a-z]+/ranking$
+  count: 19
+  status1xx: 0
+  status2xx: 16
+  status3xx: 0
+  status4xx: 3
+  status5xx: 0
+  method: GET
+  response_time:
+    max: 11.632
+    min: 0.004
+    sum: 149.19199999999995
+    usepercentile: true
+    percentiles:
+    - 0
+    - 0.004
+    - 4.532
+    - 6.62
+    - 11.264
+    - 11.32
+    - 11.332
+    - 11.632
+    - 10.252
+    - 10.38
+    - 10.384
+    - 10.264
+    - 9.764
+    - 9.848
+    - 9.804
+    - 9.628
+    - 4.98
+    - 4.488
+    - 2.696
+  request_body_bytes:
+    max: 14373
+    min: 0
+    sum: 215236
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/organizer/competition/[0-9a-z]+/finish$
+  count: 2
+  status1xx: 0
+  status2xx: 1
+  status3xx: 0
+  status4xx: 1
+  status5xx: 0
+  method: POST
+  response_time:
+    max: 0.004
+    min: 0.004
+    sum: 0.004
+    usepercentile: true
+    percentiles:
+    - 0
+    - 0.004
+  request_body_bytes:
+    max: 39
+    min: 21
+    sum: 60
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/organizer/players
+  count: 1
+  status1xx: 0
+  status2xx: 1
+  status3xx: 0
+  status4xx: 0
+  status5xx: 0
+  method: GET
+  response_time:
+    max: 0.04
+    min: 0.04
+    sum: 0.04
+    usepercentile: true
+    percentiles:
+    - 0.04
+  request_body_bytes:
+    max: 12150
+    min: 12150
+    sum: 12150
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
+- uri: /api/admin/tenants/billing
+  count: 1
+  status1xx: 0
+  status2xx: 0
+  status3xx: 0
+  status4xx: 1
+  status5xx: 0
+  method: GET
+  response_time:
+    max: 29.992
+    min: 29.992
+    sum: 29.992
+    usepercentile: true
+    percentiles:
+    - 29.992
+  request_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  response_body_bytes:
+    max: 0
+    min: 0
+    sum: 0
+    usepercentile: false
+    percentiles: []
+  time: ""
