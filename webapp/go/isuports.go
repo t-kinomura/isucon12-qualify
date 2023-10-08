@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
 	"golang.org/x/sync/singleflight"
 
 	"github.com/go-sql-driver/mysql"
@@ -547,27 +548,16 @@ func billingReportByCompetition(ctx context.Context, tenantID int64, competitonI
 	}
 
 	scoredPlayerIDs := []string{}
-	err = func() error {
-		fl, err := flockByTenantID(tenantID)
-		if err != nil {
-			return fmt.Errorf("error flockByTenantID: %w", err)
-		}
-		defer fl.Close()
-
-		// スコアを登録した参加者のIDを取得する
-		if err := adminDB.SelectContext(
-			ctx,
-			&scoredPlayerIDs,
-			"SELECT DISTINCT(player_id) FROM player_score WHERE tenant_id = ? AND competition_id = ?",
-			tenantID, comp.ID,
-		); err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("error Select count player_score: tenantID=%d, competitionID=%s, %w", tenantID, competitonID, err)
-		}
-		return nil
-	}()
-	if err != nil {
-		return nil, err
+	// スコアを登録した参加者のIDを取得する
+	if err := adminDB.SelectContext(
+		ctx,
+		&scoredPlayerIDs,
+		"SELECT DISTINCT(player_id) FROM player_score WHERE tenant_id = ? AND competition_id = ?",
+		tenantID, comp.ID,
+	); err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("error Select count player_score: tenantID=%d, competitionID=%s, %w", tenantID, competitonID, err)
 	}
+
 	// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
 	for _, pid := range scoredPlayerIDs {
 		// スコアが登録されている参加者
@@ -950,26 +940,14 @@ func competitionFinishHandler(c echo.Context) error {
 	}
 
 	scoredPlayerIDs := []string{}
-	err = func() error {
-		fl, err := flockByTenantID(v.tenantID)
-		if err != nil {
-			return fmt.Errorf("error flockByTenantID: %w", err)
-		}
-		defer fl.Close()
-
-		// スコアを登録した参加者のIDを取得する
-		if err := adminDB.SelectContext(
-			ctx,
-			&scoredPlayerIDs,
-			"SELECT DISTINCT(player_id) FROM player_score WHERE tenant_id = ? AND competition_id = ?",
-			v.tenantID, id,
-		); err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("error Select count player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, id, err)
-		}
-		return nil
-	}()
-	if err != nil {
-		return err
+	// スコアを登録した参加者のIDを取得する
+	if err := adminDB.SelectContext(
+		ctx,
+		&scoredPlayerIDs,
+		"SELECT DISTINCT(player_id) FROM player_score WHERE tenant_id = ? AND competition_id = ?",
+		v.tenantID, id,
+	); err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("error Select count player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, id, err)
 	}
 	// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
 	// 一旦コメントアウトしておく
@@ -1059,11 +1037,6 @@ func competitionScoreHandler(c echo.Context) error {
 	}
 
 	// / DELETEしたタイミングで参照が来ると空っぽのランキングになるのでロックする
-	fl, err := flockByTenantID(v.tenantID)
-	if err != nil {
-		return fmt.Errorf("error flockByTenantID: %w", err)
-	}
-	defer fl.Close()
 	var rowNum, CSVRows int64
 	playerScoreRows := map[string]PlayerScoreRow{}
 	for {
@@ -1209,8 +1182,8 @@ type PlayerHandlerResult struct {
 }
 
 type CompetitionScoreRow struct {
-	Title        string        `db:"title"`
-	Score        int64         `db:"score"`
+	Title string `db:"title"`
+	Score int64  `db:"score"`
 }
 
 // 参加者向けAPI
@@ -1255,45 +1228,34 @@ func playerHandler(c echo.Context) error {
 	// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
 	css := []CompetitionScoreRow{}
 	// pss := make([]PlayerScoreRow, 0, len(cs))
-	err = func() error {
-		fl, err := flockByTenantID(v.tenantID)
-		if err != nil {
-			return fmt.Errorf("error flockByTenantID: %w", err)
-		}
-		defer fl.Close()
-		if err := adminDB.SelectContext(
-			ctx,
-			&css,
-			"SELECT c.title, ps.score FROM competition c JOIN player_score ps on c.id = ps.competition_id WHERE c.tenant_id = ? and ps.player_id = ? ORDER BY c.created_at ASC",
-			v.tenantID,
-			p.ID,
-		); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("error Select competition: %w", err)
-		}
-		// for _, c := range cs {
-		// 	ps := PlayerScoreRow{}
-		// 	if err := adminDB.GetContext(
-		// 		ctx,
-		// 		&ps,
-		// 		// 最後にCSVに登場したスコアを採用する = row_numが一番大きいもの
-		// 		"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? AND player_id = ? ORDER BY row_num DESC LIMIT 1",
-		// 		v.tenantID,
-		// 		c.ID,
-		// 		p.ID,
-		// 	); err != nil {
-		// 		// 行がない = スコアが記録されてない
-		// 		if errors.Is(err, sql.ErrNoRows) {
-		// 			continue
-		// 		}
-		// 		return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, playerID=%s, %w", v.tenantID, c.ID, p.ID, err)
-		// 	}
-		// 	pss = append(pss, ps)
-		// }
-		return nil
-	}()
-	if err != nil {
-		return err
+	if err := adminDB.SelectContext(
+		ctx,
+		&css,
+		"SELECT c.title, ps.score FROM competition c JOIN player_score ps on c.id = ps.competition_id WHERE c.tenant_id = ? and ps.player_id = ? ORDER BY c.created_at ASC",
+		v.tenantID,
+		p.ID,
+	); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("error Select competition: %w", err)
 	}
+	// for _, c := range cs {
+	// 	ps := PlayerScoreRow{}
+	// 	if err := adminDB.GetContext(
+	// 		ctx,
+	// 		&ps,
+	// 		// 最後にCSVに登場したスコアを採用する = row_numが一番大きいもの
+	// 		"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? AND player_id = ? ORDER BY row_num DESC LIMIT 1",
+	// 		v.tenantID,
+	// 		c.ID,
+	// 		p.ID,
+	// 	); err != nil {
+	// 		// 行がない = スコアが記録されてない
+	// 		if errors.Is(err, sql.ErrNoRows) {
+	// 			continue
+	// 		}
+	// 		return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, playerID=%s, %w", v.tenantID, c.ID, p.ID, err)
+	// 	}
+	// 	pss = append(pss, ps)
+	// }
 
 	psds := make([]PlayerScoreDetail, 0, len(css))
 	for _, cs := range css {
