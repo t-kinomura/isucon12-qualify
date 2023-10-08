@@ -1123,7 +1123,7 @@ func competitionScoreHandler(c echo.Context) error {
 	valueStrings := make([]string, 0, len(playerScoreRows))
 	valueArgs := make([]interface{}, 0, len(playerScoreRows)*8)
 	for _, ps := range playerScoreRows {
-		valueStrings = append(valueStrings, "(?, ?, ?)")
+		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?)")
 		valueArgs = append(valueArgs, ps.ID)
 		valueArgs = append(valueArgs, ps.TenantID)
 		valueArgs = append(valueArgs, ps.PlayerID)
