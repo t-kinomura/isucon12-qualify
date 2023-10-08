@@ -792,7 +792,7 @@ func playersAddHandler(c echo.Context) error {
 	stmt := fmt.Sprintf("INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES %s",
 		strings.Join(valueStrings, ","))
 	if _, err := adminDB.Exec(stmt, valueArgs...); err != nil {
-		return fmt.Errorf("error bulk insert player_scores: %w", err)
+		return fmt.Errorf("error bulk insert players: %w", err)
 	}
 
 	res := PlayersAddHandlerResult{
@@ -1200,6 +1200,11 @@ type PlayerHandlerResult struct {
 	Scores []PlayerScoreDetail `json:"scores"`
 }
 
+type CompetitionScoreRow struct {
+	Title        string        `db:"title"`
+	Score        int64         `db:"score"`
+}
+
 // 参加者向けAPI
 // GET /api/player/player/:player_id
 // 参加者の詳細情報を取得する
@@ -1229,58 +1234,68 @@ func playerHandler(c echo.Context) error {
 		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
 	}
-	cs := []CompetitionRow{}
-	if err := adminDB.SelectContext(
-		ctx,
-		&cs,
-		"SELECT * FROM competition WHERE tenant_id = ? ORDER BY created_at ASC",
-		v.tenantID,
-	); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("error Select competition: %w", err)
-	}
+	// cs := []CompetitionRow{}
+	// if err := adminDB.SelectContext(
+	// 	ctx,
+	// 	&cs,
+	// 	"SELECT * FROM competition WHERE tenant_id = ? ORDER BY created_at ASC",
+	// 	v.tenantID,
+	// ); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	// 	return fmt.Errorf("error Select competition: %w", err)
+	// }
 
 	// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
-	pss := make([]PlayerScoreRow, 0, len(cs))
+	css := []CompetitionScoreRow{}
+	// pss := make([]PlayerScoreRow, 0, len(cs))
 	err = func() error {
 		fl, err := flockByTenantID(v.tenantID)
 		if err != nil {
 			return fmt.Errorf("error flockByTenantID: %w", err)
 		}
 		defer fl.Close()
-		for _, c := range cs {
-			ps := PlayerScoreRow{}
-			if err := adminDB.GetContext(
-				ctx,
-				&ps,
-				// 最後にCSVに登場したスコアを採用する = row_numが一番大きいもの
-				"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? AND player_id = ? ORDER BY row_num DESC LIMIT 1",
-				v.tenantID,
-				c.ID,
-				p.ID,
-			); err != nil {
-				// 行がない = スコアが記録されてない
-				if errors.Is(err, sql.ErrNoRows) {
-					continue
-				}
-				return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, playerID=%s, %w", v.tenantID, c.ID, p.ID, err)
-			}
-			pss = append(pss, ps)
+		if err := adminDB.SelectContext(
+			ctx,
+			&css,
+			"SELECT c.title, ps.score FROM competition c JOIN player_score ps on c.id = ps.competition_id WHERE c.tenant_id = ? and ps.player_id = ? ORDER BY created_at ASC",
+			v.tenantID,
+			p.ID,
+		); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("error Select competition: %w", err)
 		}
+		// for _, c := range cs {
+		// 	ps := PlayerScoreRow{}
+		// 	if err := adminDB.GetContext(
+		// 		ctx,
+		// 		&ps,
+		// 		// 最後にCSVに登場したスコアを採用する = row_numが一番大きいもの
+		// 		"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? AND player_id = ? ORDER BY row_num DESC LIMIT 1",
+		// 		v.tenantID,
+		// 		c.ID,
+		// 		p.ID,
+		// 	); err != nil {
+		// 		// 行がない = スコアが記録されてない
+		// 		if errors.Is(err, sql.ErrNoRows) {
+		// 			continue
+		// 		}
+		// 		return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, playerID=%s, %w", v.tenantID, c.ID, p.ID, err)
+		// 	}
+		// 	pss = append(pss, ps)
+		// }
 		return nil
 	}()
 	if err != nil {
 		return err
 	}
 
-	psds := make([]PlayerScoreDetail, 0, len(pss))
-	for _, ps := range pss {
-		comp, err := retrieveCompetition(ctx, ps.CompetitionID)
-		if err != nil {
-			return fmt.Errorf("error retrieveCompetition: %w", err)
-		}
+	psds := make([]PlayerScoreDetail, 0, len(css))
+	for _, cs := range css {
+		// comp, err := retrieveCompetition(ctx, ps.CompetitionID)
+		// if err != nil {
+		// 	return fmt.Errorf("error retrieveCompetition: %w", err)
+		// }
 		psds = append(psds, PlayerScoreDetail{
-			CompetitionTitle: comp.Title,
-			Score:            ps.Score,
+			CompetitionTitle: cs.Title,
+			Score:            cs.Score,
 		})
 	}
 
