@@ -150,6 +150,7 @@ func Run() {
 
 	// initialize cache
 	rankingCache = *NewRankingCache(3000)
+	playerCache = *NewPlayerCache(50000)
 
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
@@ -213,6 +214,32 @@ func (r *RankingCache) StoreDBUpdateTime(competitionID string, now time.Time) {
 	r.dbMutex.Lock()
 	defer r.dbMutex.Unlock()
 	r.updateDBTime[competitionID] = now
+}
+
+var playerCache PlayerCache
+
+type PlayerCache struct {
+	data  map[string]PlayerDetail
+	mutex sync.RWMutex
+}
+
+func NewPlayerCache(initialMapSize int) *PlayerCache {
+	return &PlayerCache{
+		data: make(map[string]PlayerDetail, initialMapSize),
+	}
+}
+
+func (p *PlayerCache) StorePlayerCache(player PlayerDetail) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.data[player.ID] = player
+}
+
+func (p *PlayerCache) LoadPlayerCache(playerID string) (PlayerDetail, bool) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	player, found := p.data[playerID]
+	return player, found
 }
 
 // エラー処理関数
@@ -385,12 +412,12 @@ type PlayerRow struct {
 }
 
 // 参加者を取得する
-func retrievePlayer(ctx context.Context, id string) (*PlayerRow, error) {
-	var p PlayerRow
-	if err := adminDB.GetContext(ctx, &p, "SELECT * FROM player WHERE id = ?", id); err != nil {
-		return nil, fmt.Errorf("error Select player: id=%s, %w", id, err)
+func retrievePlayer(ctx context.Context, id string) (*PlayerDetail, error) {
+	player, found := playerCache.LoadPlayerCache(id)
+	if found {
+		return &player, nil
 	}
-	return &p, nil
+	return nil, nil
 }
 
 // 参加者を認可する
@@ -739,6 +766,14 @@ func playersAddHandler(c echo.Context) error {
 		return fmt.Errorf("error bulk insert players: %w", err)
 	}
 
+	for _, p := range pds {
+		playerCache.StorePlayerCache(PlayerDetail{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			IsDisqualified: p.IsDisqualified,
+		})
+	}
+
 	res := PlayersAddHandlerResult{
 		Players: pds,
 	}
@@ -783,11 +818,21 @@ func playerDisqualifiedHandler(c echo.Context) error {
 		return fmt.Errorf("error retrievePlayer: %w", err)
 	}
 
+	// cacheを更新する
+	// 遅延しても良いのでgoroutineで更新する
+	go func(p *PlayerDetail) {
+		playerCache.StorePlayerCache(PlayerDetail{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			IsDisqualified: true,
+		})
+	}(p)
+
 	res := PlayerDisqualifiedHandlerResult{
 		Player: PlayerDetail{
 			ID:             p.ID,
 			DisplayName:    p.DisplayName,
-			IsDisqualified: p.IsDisqualified,
+			IsDisqualified: true,
 		},
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
@@ -1088,10 +1133,11 @@ func competitionScoreHandler(c echo.Context) error {
 	go func() {
 		ranks := make([]CompetitionRank, 0, len(playerScoreRows))
 		for _, ps := range playerScoreRows {
+			player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
 			ranks = append(ranks, CompetitionRank{
 				Score:             ps.Score,
 				PlayerID:          ps.PlayerID,
-				PlayerDisplayName: ps.DisplayName,
+				PlayerDisplayName: player.DisplayName,
 				RowNum:            ps.RowNum,
 			})
 		}
