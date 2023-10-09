@@ -379,15 +379,10 @@ type PlayerScoreRow struct {
 }
 
 type PlayerScorePlayerRow struct {
-	TenantID      int64  `db:"tenant_id"`
-	ID            string `db:"id"`
 	PlayerID      string `db:"player_id"`
-	CompetitionID string `db:"competition_id"`
 	Score         int64  `db:"score"`
 	RowNum        int64  `db:"row_num"`
 	DisplayName   string `db:"display_name"`
-	CreatedAt     int64  `db:"created_at"`
-	UpdatedAt     int64  `db:"updated_at"`
 }
 
 type TenantsAddHandlerResult struct {
@@ -1256,14 +1251,19 @@ func competitionRankingHandler(c echo.Context) error {
 	}
 
 	query := `
-	SELECT ps.*, p.display_name
+	SELECT ps.score, ps.player_id, ps.row_num, p.display_name
 	FROM player p
 	JOIN player_score ps
 		ON ps.tenant_id = ?
 		AND ps.competition_id = ?
 		AND ps.player_id = p.id
+	LIMIT 100
 	`
-	pss := []PlayerScorePlayerRow{}
+	if rankAfter != 0 {
+		query += " OFFSET " + strconv.FormatInt(rankAfter, 10)
+	}
+
+	pss := make([]PlayerScorePlayerRow, 0, 100)
 	err = func() error {
 		if err := adminDB.SelectContext(
 			ctx,
@@ -1280,14 +1280,7 @@ func competitionRankingHandler(c echo.Context) error {
 		return err
 	}
 	ranks := make([]CompetitionRank, 0, len(pss))
-	scoredPlayerSet := make(map[string]struct{}, len(pss))
 	for _, ps := range pss {
-		// player_scoreが同一player_id内ではrow_numの降順でソートされているので
-		// 現れたのが2回目以降のplayer_idはより大きいrow_numでスコアが出ているとみなせる
-		if _, ok := scoredPlayerSet[ps.PlayerID]; ok {
-			continue
-		}
-		scoredPlayerSet[ps.PlayerID] = struct{}{}
 		ranks = append(ranks, CompetitionRank{
 			Score:             ps.Score,
 			PlayerID:          ps.PlayerID,
@@ -1302,19 +1295,13 @@ func competitionRankingHandler(c echo.Context) error {
 		return ranks[i].Score > ranks[j].Score
 	})
 	pagedRanks := make([]CompetitionRank, 0, 100)
-	for i, rank := range ranks {
-		if int64(i) < rankAfter {
-			continue
-		}
+	for _, rank := range ranks {
 		pagedRanks = append(pagedRanks, CompetitionRank{
-			Rank:              int64(i + 1),
+			Rank:              int64(rankAfter + 1),
 			Score:             rank.Score,
 			PlayerID:          rank.PlayerID,
 			PlayerDisplayName: rank.PlayerDisplayName,
 		})
-		if len(pagedRanks) >= 100 {
-			break
-		}
 	}
 
 	res := SuccessResult{
