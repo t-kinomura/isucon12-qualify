@@ -1,5 +1,6 @@
 deploy:
 	cp -r ./webapp/go ../webapp
+	cp ./webapp/docker-compose-go.yml ../webapp
 	cp ./webapp/sql/init.sh ../webapp/sql/init.sh
 	cp ./webapp/sql/init.sql ../webapp/sql/init.sql
 	sudo systemctl restart isuports.service
@@ -30,11 +31,11 @@ show-applog:
 	make -C webapp/go show-applog
 
 enable-pprof:
-	sed -i -e 's/PPROF=0/PPROF=1/' env.sh
+	sed -i -e 's/PPROF: 0/PPROF: 1/' ./webapp/docker-compose-go.yml
 
 disable-pprof:
-	sed -i -e 's/PPROF=1/PPROF=0/' env.sh
+	sed -i -e 's/PPROF: 1/PPROF: 0/' ./webapp/docker-compose-go.yml
 
 start-pprof: enable-pprof deploy
-	go tool pprof -http=0.0.0.0:1080 ~/webapp/go/isucholar http://localhost:6060/debug/pprof/profile?seconds=80
+	go tool pprof -http=0.0.0.0:1080 http://localhost:6060/debug/pprof/profile?seconds=100
 
