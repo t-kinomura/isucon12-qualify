@@ -2,6 +2,7 @@ deploy:
 	cp -r ./webapp/go ../webapp
 	cp ./webapp/docker-compose-go.yml ../webapp
 	cp ./webapp/sql/init.sh ../webapp/sql/init.sh
+	cp ./webapp/sql/tenant_data_dump.sql ../webapp/sql/tenant_data_dump.sql
 	cp ./webapp/sql/init.sql ../webapp/sql/init.sql
 	sudo systemctl restart isuports.service
 
