@@ -987,12 +987,12 @@ func competitionScoreHandler(c echo.Context) error {
 		CSVRows++
 	}
 
-	// playerの存在チェック
-	playerIDs := make([]string, 0, len(playerScoreRows))
-	for playerID := range playerScoreRows {
-		playerIDs = append(playerIDs, playerID)
-	}
-	if len(playerIDs) != 0 {
+	if len(playerScoreRows) != 0 {
+		// playerの存在チェック
+		playerIDs := make([]string, 0, len(playerScoreRows))
+		for playerID := range playerScoreRows {
+			playerIDs = append(playerIDs, playerID)
+		}
 		var dbPlayerCount int64
 		if err := adminDB.GetContext(ctx, &dbPlayerCount, "SELECT COUNT(*) FROM player WHERE id IN (?)", strings.Join(playerIDs, ",")); err != nil {
 			return fmt.Errorf("failed to fetch player count: %w", err)
