@@ -1257,10 +1257,8 @@ func competitionRankingHandler(c echo.Context) error {
 		ON ps.tenant_id = ?
 		AND ps.competition_id = ?
 		AND ps.player_id = p.id
+	LIMIT ?, 1000
 	`
-	if rankAfter != 0 {
-		query += " OFFSET " + strconv.FormatInt(rankAfter, 10)
-	}
 
 	pss := []PlayerScorePlayerRow{}
 	err = func() error {
@@ -1270,6 +1268,7 @@ func competitionRankingHandler(c echo.Context) error {
 			query,
 			tenant.ID,
 			competitionID,
+			rankAfter,
 		); err != nil {
 			return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
 		}
