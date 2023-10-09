@@ -2,15 +2,13 @@ deploy:
 	cp -r ./webapp/go ../webapp
 	cp ./webapp/docker-compose-go.yml ../webapp
 	cp ./webapp/sql/init.sh ../webapp/sql/init.sh
+	cp ./webapp/sql/tenant_data_dump.sql ../webapp/sql/tenant_data_dump.sql
 	cp ./webapp/sql/init.sql ../webapp/sql/init.sql
 	sudo systemctl restart isuports.service
 
 bench-prepare:
 	sudo rm -f /var/log/nginx/access.log
 	sudo systemctl reload nginx.service
-	time mysql -uroot -proot isuports < ./webapp/sql/tenant_data_dump.sql
-	sudo rm -f /var/log/mysql/mysql-slow.log
-	sudo systemctl restart mysql.service
 
 bench-result:
 	mkdir -p alp/dump
@@ -25,7 +23,7 @@ latest-alp:
 	vim alp/result/`git show --format='%h' --no-patch`
 
 show-slowlog:
-	sudo mysqldumpslow /var/log/mysql/mysql-slow.log
+	echo "2台目で実行してください"
 
 show-applog:
 	make -C webapp/go show-applog
