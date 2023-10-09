@@ -1085,6 +1085,32 @@ func competitionScoreHandler(c echo.Context) error {
 		return fmt.Errorf("error bulk insert player_scores: %w", err)
 	}
 	tx.Commit()
+	go func() {
+		ranks := make([]CompetitionRank, 0, len(playerScoreRows))
+		for _, ps := range playerScoreRows {
+			ranks = append(ranks, CompetitionRank{
+				Score:             ps.Score,
+				PlayerID:          ps.PlayerID,
+				PlayerDisplayName: ps.DisplayName,
+				RowNum:            ps.RowNum,
+			})
+		}
+		sort.Slice(ranks, func(i, j int) bool {
+			if ranks[i].Score == ranks[j].Score {
+				return ranks[i].RowNum < ranks[j].RowNum
+			}
+			return ranks[i].Score > ranks[j].Score
+		})
+		pagedRanks := make([]CompetitionRank, 0, len(playerScoreRows))
+		for i, rank := range ranks {
+			pagedRanks = append(pagedRanks, CompetitionRank{
+				Rank:              int64(i + 1),
+				Score:             rank.Score,
+				PlayerID:          rank.PlayerID,
+				PlayerDisplayName: rank.PlayerDisplayName,
+			})
+		}
+	}()
 
 	return c.JSON(http.StatusOK, SuccessResult{
 		Status: true,
@@ -1337,14 +1363,7 @@ func competitionRankingHandler(c echo.Context) error {
 		return err
 	}
 	ranks := make([]CompetitionRank, 0, len(pss))
-	scoredPlayerSet := make(map[string]struct{}, len(pss))
 	for _, ps := range pss {
-		// player_scoreが同一player_id内ではrow_numの降順でソートされているので
-		// 現れたのが2回目以降のplayer_idはより大きいrow_numでスコアが出ているとみなせる
-		if _, ok := scoredPlayerSet[ps.PlayerID]; ok {
-			continue
-		}
-		scoredPlayerSet[ps.PlayerID] = struct{}{}
 		ranks = append(ranks, CompetitionRank{
 			Score:             ps.Score,
 			PlayerID:          ps.PlayerID,
