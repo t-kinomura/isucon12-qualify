@@ -1295,9 +1295,9 @@ func competitionRankingHandler(c echo.Context) error {
 		return ranks[i].Score > ranks[j].Score
 	})
 	pagedRanks := make([]CompetitionRank, 0, 100)
-	for i, rank := range ranks {
+	for _, rank := range ranks {
 		pagedRanks = append(pagedRanks, CompetitionRank{
-			Rank:              rankAfter + int64(i + 1),
+			Rank:              int64(rankAfter + 1),
 			Score:             rank.Score,
 			PlayerID:          rank.PlayerID,
 			PlayerDisplayName: rank.PlayerDisplayName,
