@@ -18,8 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/go-sql-driver/mysql"
 	"github.com/gofrs/flock"
 	"github.com/jmoiron/sqlx"
@@ -1036,7 +1034,6 @@ func competitionScoreHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid CSV headers")
 	}
 
-	// / DELETEしたタイミングで参照が来ると空っぽのランキングになるのでロックする
 	var rowNum, CSVRows int64
 	playerScoreRows := map[string]PlayerScoreRow{}
 	for {
@@ -1296,8 +1293,6 @@ type CompetitionRankingHandlerResult struct {
 	Ranks       []CompetitionRank `json:"ranks"`
 }
 
-var group singleflight.Group
-
 // 参加者向けAPI
 // GET /api/player/competition/:competition_id/ranking
 // 大会ごとのランキングを取得する
@@ -1356,12 +1351,6 @@ func competitionRankingHandler(c echo.Context) error {
 
 	pss := []PlayerScorePlayerRow{}
 	err = func() error {
-		// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
-		// fl, err := flockByTenantID(v.tenantID)
-		// if err != nil {
-		// 	return fmt.Errorf("error flockByTenantID: %w", err)
-		// }
-		// defer fl.Close()
 		if err := adminDB.SelectContext(
 			ctx,
 			&pss,
