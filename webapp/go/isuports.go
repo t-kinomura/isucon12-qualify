@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"reflect"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
