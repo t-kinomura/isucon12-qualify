@@ -379,15 +379,10 @@ type PlayerScoreRow struct {
 }
 
 type PlayerScorePlayerRow struct {
-	TenantID      int64  `db:"tenant_id"`
-	ID            string `db:"id"`
 	PlayerID      string `db:"player_id"`
-	CompetitionID string `db:"competition_id"`
 	Score         int64  `db:"score"`
 	RowNum        int64  `db:"row_num"`
 	DisplayName   string `db:"display_name"`
-	CreatedAt     int64  `db:"created_at"`
-	UpdatedAt     int64  `db:"updated_at"`
 }
 
 type TenantsAddHandlerResult struct {
@@ -1256,7 +1251,7 @@ func competitionRankingHandler(c echo.Context) error {
 	}
 
 	query := `
-	SELECT ps.*, p.display_name
+	SELECT ps.score, ps.player_id, ps.row_num, p.display_name
 	FROM player p
 	JOIN player_score ps
 		ON ps.tenant_id = ?
