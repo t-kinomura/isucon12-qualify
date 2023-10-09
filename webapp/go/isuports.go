@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -147,10 +148,71 @@ func Run() {
 	adminDB.SetMaxOpenConns(50)
 	defer adminDB.Close()
 
+	// initialize cache
+	rankingCache = *NewRankingCache(3000)
+
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
 	serverPort := fmt.Sprintf(":%s", port)
 	e.Logger.Fatal(e.Start(serverPort))
+}
+
+// cache
+
+var rankingCache RankingCache
+
+type RankingCache struct {
+	dataMutex       sync.RWMutex
+	data            map[string][]CompetitionRank
+	updateCacheTime map[string]time.Time
+
+	dbMutex      sync.RWMutex
+	updateDBTime map[string]time.Time
+}
+
+func NewRankingCache(initialMapSize int) *RankingCache {
+	return &RankingCache{
+		data:            make(map[string][]CompetitionRank, initialMapSize),
+		updateCacheTime: make(map[string]time.Time, initialMapSize),
+		updateDBTime:    make(map[string]time.Time, initialMapSize),
+	}
+}
+
+func (r *RankingCache) StoreRankingCache(competitionID string, ranking []CompetitionRank, now time.Time) {
+	r.dataMutex.Lock()
+	defer r.dataMutex.Unlock()
+	r.data[competitionID] = ranking
+	r.updateCacheTime[competitionID] = now
+}
+
+func (r *RankingCache) LoadRankingCache(competitionID string) (ranking []CompetitionRank, found bool, expired bool) {
+	rank, found, cacheTime := func() ([]CompetitionRank, bool, time.Time) {
+		r.dataMutex.RLock()
+		defer r.dataMutex.RUnlock()
+		rank, found := r.data[competitionID]
+		var cacheTime time.Time
+		if found {
+			cacheTime = r.updateCacheTime[competitionID]
+		}
+		return rank, found, cacheTime
+	}()
+	if !found {
+		return nil, false, false
+	}
+	expired = func() bool {
+		r.dbMutex.RLock()
+		defer r.dbMutex.RUnlock()
+		dbTime := r.updateDBTime[competitionID]
+		return dbTime.After(cacheTime)
+	}()
+
+	return rank, true, expired
+}
+
+func (r *RankingCache) StoreDBUpdateTime(competitionID string, now time.Time) {
+	r.dbMutex.Lock()
+	defer r.dbMutex.Unlock()
+	r.updateDBTime[competitionID] = now
 }
 
 // エラー処理関数
