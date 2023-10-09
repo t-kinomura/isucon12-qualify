@@ -1261,12 +1261,20 @@ func competitionRankingHandler(c echo.Context) error {
 		}
 	}
 
+	query := `
+	SELECT ps.*, p.display_name
+	FROM player p
+	JOIN player_score ps
+		ON ps.tenant_id = ?
+		AND ps.competition_id = ?
+		AND ps.player_id = p.id
+	`
 	pss := []PlayerScorePlayerRow{}
 	err = func() error {
 		if err := adminDB.SelectContext(
 			ctx,
 			&pss,
-			"SELECT player_score.*, player.display_name FROM player_score JOIN player on player_score.player_id = player.id WHERE player_score.tenant_id = ? AND player_score.competition_id = ?",
+			query,
 			tenant.ID,
 			competitionID,
 		); err != nil {
