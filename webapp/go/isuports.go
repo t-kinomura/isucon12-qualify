@@ -1244,7 +1244,9 @@ func playerHandler(c echo.Context) error {
 		query,
 		args...,
 	); err != nil {
-		return fmt.Errorf("error Select player_scores: %w", err)
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("error Select player_scores: %w", err)
+		}
 	}
 
 	psds := make([]PlayerScoreDetail, 0, len(pss))
