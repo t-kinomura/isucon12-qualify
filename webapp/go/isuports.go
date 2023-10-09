@@ -1386,45 +1386,50 @@ func competitionRankingHandler(c echo.Context) error {
 		}
 	}
 
-	query := `
-	SELECT ps.score, ps.player_id, ps.row_num, p.display_name
-	FROM player p
-	JOIN player_score ps
-		ON ps.tenant_id = ?
-		AND ps.competition_id = ?
-		AND ps.player_id = p.id
-	`
-	pss := []PlayerScorePlayerRow{}
-	err = func() error {
-		if err := adminDB.SelectContext(
-			ctx,
-			&pss,
-			query,
-			tenant.ID,
-			competitionID,
-		); err != nil {
-			return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
+	var ranks []CompetitionRank
+	ranks, found, expired := rankingCache.LoadRankingCache(competitionID)
+	if !found || expired {
+		query := `
+		SELECT ps.score, ps.player_id, ps.row_num, p.display_name
+		FROM player p
+		JOIN player_score ps
+			ON ps.tenant_id = ?
+			AND ps.competition_id = ?
+			AND ps.player_id = p.id
+		`
+		pss := []PlayerScorePlayerRow{}
+		err = func() error {
+			if err := adminDB.SelectContext(
+				ctx,
+				&pss,
+				query,
+				tenant.ID,
+				competitionID,
+			); err != nil {
+				return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
 		}
-		return nil
-	}()
-	if err != nil {
-		return err
-	}
-	ranks := make([]CompetitionRank, 0, len(pss))
-	for _, ps := range pss {
-		ranks = append(ranks, CompetitionRank{
-			Score:             ps.Score,
-			PlayerID:          ps.PlayerID,
-			PlayerDisplayName: ps.DisplayName,
-			RowNum:            ps.RowNum,
+		ranks = make([]CompetitionRank, 0, len(pss))
+		for _, ps := range pss {
+			ranks = append(ranks, CompetitionRank{
+				Score:             ps.Score,
+				PlayerID:          ps.PlayerID,
+				PlayerDisplayName: ps.DisplayName,
+				RowNum:            ps.RowNum,
+			})
+		}
+		sort.Slice(ranks, func(i, j int) bool {
+			if ranks[i].Score == ranks[j].Score {
+				return ranks[i].RowNum < ranks[j].RowNum
+			}
+			return ranks[i].Score > ranks[j].Score
 		})
 	}
-	sort.Slice(ranks, func(i, j int) bool {
-		if ranks[i].Score == ranks[j].Score {
-			return ranks[i].RowNum < ranks[j].RowNum
-		}
-		return ranks[i].Score > ranks[j].Score
-	})
+
 	pagedRanks := make([]CompetitionRank, 0, 100)
 	for i, rank := range ranks {
 		if int64(i) < rankAfter {
