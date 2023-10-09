@@ -1257,10 +1257,11 @@ func competitionRankingHandler(c echo.Context) error {
 		ON ps.tenant_id = ?
 		AND ps.competition_id = ?
 		AND ps.player_id = p.id
-	LIMIT ?, 101
+	ORDER BY ps.score DESC, ps.row_num ASC
+	LIMIT ?, 100
 	`
 
-	pss := make([]PlayerScorePlayerRow, 0, 101)
+	pss := make([]PlayerScorePlayerRow, 0, 100)
 	err = func() error {
 		if err := adminDB.SelectContext(
 			ctx,
@@ -1286,12 +1287,12 @@ func competitionRankingHandler(c echo.Context) error {
 			RowNum:            ps.RowNum,
 		})
 	}
-	sort.Slice(ranks, func(i, j int) bool {
-		if ranks[i].Score == ranks[j].Score {
-			return ranks[i].RowNum < ranks[j].RowNum
-		}
-		return ranks[i].Score > ranks[j].Score
-	})
+	// sort.Slice(ranks, func(i, j int) bool {
+	// 	if ranks[i].Score == ranks[j].Score {
+	// 		return ranks[i].RowNum < ranks[j].RowNum
+	// 	}
+	// 	return ranks[i].Score > ranks[j].Score
+	// })
 	pagedRanks := make([]CompetitionRank, 0, 100)
 	for i, rank := range ranks {
 		pagedRanks = append(pagedRanks, CompetitionRank{
@@ -1300,9 +1301,6 @@ func competitionRankingHandler(c echo.Context) error {
 			PlayerID:          rank.PlayerID,
 			PlayerDisplayName: rank.PlayerDisplayName,
 		})
-		if len(pagedRanks) >= 100 {
-			break
-		}
 	}
 
 	res := SuccessResult{
