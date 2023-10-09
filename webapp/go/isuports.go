@@ -1000,7 +1000,7 @@ func competitionScoreHandler(c echo.Context) error {
 		if int64(len(playerScoreRows)) != dbPlayerCount {
 			return echo.NewHTTPError(
 				http.StatusBadRequest,
-				fmt.Sprintf("player not found"),
+				fmt.Sprintf("player not found. player count in CSV: %d, player count in DB: %d", len(playerScoreRows), dbPlayerCount),
 			)
 		}
 	}
