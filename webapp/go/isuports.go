@@ -425,10 +425,11 @@ func retrievePlayer(ctx context.Context, id string) (*PlayerDetail, error) {
 func authorizePlayer(ctx context.Context, id string) error {
 	player, err := retrievePlayer(ctx, id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusUnauthorized, "player not found")
-		}
-		return fmt.Errorf("error retrievePlayer from viewer: %w", err)
+		return fmt.Errorf("error retrievePlayer: %w", err)
+	}
+	if player == nil {
+		// 存在しないプレイヤー
+		return echo.NewHTTPError(http.StatusNotFound, "player not found")
 	}
 	if player.IsDisqualified {
 		return echo.NewHTTPError(http.StatusForbidden, "player is disqualified")
@@ -811,11 +812,11 @@ func playerDisqualifiedHandler(c echo.Context) error {
 	}
 	p, err := retrievePlayer(ctx, playerID)
 	if err != nil {
-		// 存在しないプレイヤー
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "player not found")
-		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
+	}
+	if p == nil {
+		// 存在しないプレイヤー
+		return echo.NewHTTPError(http.StatusNotFound, "player not found")
 	}
 
 	// cacheを更新する
@@ -1251,10 +1252,11 @@ func playerHandler(c echo.Context) error {
 	}
 	p, err := retrievePlayer(ctx, playerID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "player not found")
-		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
+	}
+	if p == nil {
+		// 存在しないプレイヤー
+		return echo.NewHTTPError(http.StatusNotFound, "player not found")
 	}
 	cs := []CompetitionRow{}
 	if err := adminDB.SelectContext(
@@ -1577,18 +1579,18 @@ func meHandler(c echo.Context) error {
 	ctx := context.Background()
 	p, err := retrievePlayer(ctx, v.playerID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return c.JSON(http.StatusOK, SuccessResult{
-				Status: true,
-				Data: MeHandlerResult{
-					Tenant:   td,
-					Me:       nil,
-					Role:     RoleNone,
-					LoggedIn: false,
-				},
-			})
-		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
+	}
+	if p == nil {
+		return c.JSON(http.StatusOK, SuccessResult{
+			Status: true,
+			Data: MeHandlerResult{
+				Tenant:   td,
+				Me:       nil,
+				Role:     RoleNone,
+				LoggedIn: false,
+			},
+		})
 	}
 
 	return c.JSON(http.StatusOK, SuccessResult{
