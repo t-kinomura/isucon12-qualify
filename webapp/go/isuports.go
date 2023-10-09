@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,6 +96,13 @@ func Run() {
 	e.Logger.SetLevel(log.DEBUG)
 
 	var err error
+
+	// pprof
+	if getEnv("PPROF", "0") == "1" {
+		go func() {
+			e.Logger.Info(http.ListenAndServe("localhost:6060", nil))
+		}()
+	}
 
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
