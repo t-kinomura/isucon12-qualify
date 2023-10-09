@@ -949,6 +949,7 @@ func competitionScoreHandler(c echo.Context) error {
 
 	var rowNum, CSVRows int64
 	playerScoreRows := map[string]PlayerScoreRow{}
+	now := time.Now().Unix()
 	for {
 		rowNum++
 		row, err := r.Read()
@@ -983,7 +984,6 @@ func competitionScoreHandler(c echo.Context) error {
 		if err != nil {
 			return fmt.Errorf("error dispenseID: %w", err)
 		}
-		now := time.Now().Unix()
 		playerScoreRows[playerID] = PlayerScoreRow{
 			ID:            id,
 			TenantID:      v.tenantID,
