@@ -1619,6 +1619,81 @@ func initializeHandler(c echo.Context) error {
 	if err != nil {
 		return fmt.Errorf("error exec.Command: %s %e", string(out), err)
 	}
+
+	ctx := context.Background()
+
+	// playerCacheに初期データを保存する
+	// initializeで終わらせたいので同期的に処理する
+	var pls []PlayerRow
+	if err := adminDB.SelectContext(
+		ctx,
+		&pls,
+		"SELECT * FROM player",
+	); err != nil {
+		return fmt.Errorf("error Select player: %w", err)
+	}
+	go func() {
+		cs := []CompetitionRow{}
+		if err := adminDB.SelectContext(
+			ctx,
+			&cs,
+			"SELECT * FROM competition",
+		); err != nil {
+			c.Logger().Errorf("error Select competition: %w", err)
+			return
+		}
+
+		for _, comp := range cs {
+			pss := []PlayerScoreRow{}
+			if err := adminDB.SelectContext(
+				ctx,
+				&pss,
+				"SELECT * FROM player_score WHERE competition_id  = ?",
+				comp.ID,
+			); err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					c.Logger().Errorf("error Select player_scores: %w", err)
+					return
+				}
+			}
+
+			go func(pss []PlayerScoreRow) {
+				ranks := make([]CompetitionRank, 0, len(pss))
+				for _, ps := range pss {
+					player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
+					ranks = append(ranks, CompetitionRank{
+						Score:             ps.Score,
+						PlayerID:          ps.PlayerID,
+						PlayerDisplayName: player.DisplayName,
+						RowNum:            ps.RowNum,
+					})
+				}
+				sort.Slice(ranks, func(i, j int) bool {
+					if ranks[i].Score == ranks[j].Score {
+						return ranks[i].RowNum < ranks[j].RowNum
+					}
+					return ranks[i].Score > ranks[j].Score
+				})
+				pagedRanks := make([]CompetitionRank, 0, len(pss))
+				for i, rank := range ranks {
+					pagedRanks = append(pagedRanks, CompetitionRank{
+						Rank:              int64(i + 1),
+						Score:             rank.Score,
+						PlayerID:          rank.PlayerID,
+						PlayerDisplayName: rank.PlayerDisplayName,
+					})
+				}
+			}(pss)
+		}
+	}()
+	for _, p := range pls {
+		playerCache.StorePlayerCache(PlayerDetail{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			IsDisqualified: p.IsDisqualified,
+		})
+	}
+
 	res := InitializeHandlerResult{
 		Lang: "go",
 	}
