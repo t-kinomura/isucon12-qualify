@@ -994,7 +994,12 @@ func competitionScoreHandler(c echo.Context) error {
 			playerIDs = append(playerIDs, playerID)
 		}
 		var dbPlayerCount int64
-		if err := adminDB.GetContext(ctx, &dbPlayerCount, "SELECT COUNT(*) FROM player WHERE id IN (?)", strings.Join(playerIDs, ",")); err != nil {
+		sql := `SELECT COUNT(*) FROM player WHERE id IN (?)`
+		sql, params, err := sqlx.In(sql, playerIDs)
+		if err != nil {
+			return fmt.Errorf("failed to fetch player count: %w", err)
+		}
+		if err := adminDB.GetContext(ctx, &dbPlayerCount, sql, params...); err != nil {
 			return fmt.Errorf("failed to fetch player count: %w", err)
 		}
 		if int64(len(playerScoreRows)) != dbPlayerCount {
