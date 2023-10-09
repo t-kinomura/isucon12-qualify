@@ -963,16 +963,6 @@ func competitionScoreHandler(c echo.Context) error {
 			return fmt.Errorf("row must have two columns: %#v", row)
 		}
 		playerID, scoreStr := row[0], row[1]
-		// if _, err := retrievePlayer(ctx, playerID); err != nil {
-		// 	// 存在しない参加者が含まれている
-		// 	if errors.Is(err, sql.ErrNoRows) {
-		// 		return echo.NewHTTPError(
-		// 			http.StatusBadRequest,
-		// 			fmt.Sprintf("player not found: %s", playerID),
-		// 		)
-		// 	}
-		// 	return fmt.Errorf("error retrievePlayer: %w", err)
-		// }
 		var score int64
 		if score, err = strconv.ParseInt(scoreStr, 10, 64); err != nil {
 			return echo.NewHTTPError(
@@ -1002,15 +992,17 @@ func competitionScoreHandler(c echo.Context) error {
 	for playerID := range playerScoreRows {
 		playerIDs = append(playerIDs, playerID)
 	}
-	var dbPlayerCount int64
-	if err := adminDB.GetContext(ctx, &dbPlayerCount, "SELECT COUNT(*) FROM player WHERE id IN (?)", strings.Join(playerIDs, ",")); err != nil {
-		return fmt.Errorf("failed to fetch player count: %w", err)
-	}
-	if int64(len(playerScoreRows)) != dbPlayerCount {
-		return echo.NewHTTPError(
-			http.StatusBadRequest,
-			fmt.Sprintf("player not found"),
-		)
+	if len(playerIDs) != 0 {
+		var dbPlayerCount int64
+		if err := adminDB.GetContext(ctx, &dbPlayerCount, "SELECT COUNT(*) FROM player WHERE id IN (?)", strings.Join(playerIDs, ",")); err != nil {
+			return fmt.Errorf("failed to fetch player count: %w", err)
+		}
+		if int64(len(playerScoreRows)) != dbPlayerCount {
+			return echo.NewHTTPError(
+				http.StatusBadRequest,
+				fmt.Sprintf("player not found"),
+			)
+		}
 	}
 
 	valueStrings := make([]string, 0, len(playerScoreRows))
