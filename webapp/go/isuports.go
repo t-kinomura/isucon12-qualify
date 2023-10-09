@@ -48,8 +48,6 @@ var (
 	tenantNameRegexp = regexp.MustCompile(`^[a-z][a-z0-9-]{0,61}[a-z0-9]$`)
 
 	adminDB *sqlx.DB
-
-	sqliteDriverName = "sqlite3"
 )
 
 // 環境変数を取得する、なければデフォルト値を返す
