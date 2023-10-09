@@ -1,6 +1,6 @@
 module github.com/isucon/isucon12-qualify/webapp/go
 
-go 1.18
+go 1.21
 
 require (
 	github.com/go-sql-driver/mysql v1.6.0
