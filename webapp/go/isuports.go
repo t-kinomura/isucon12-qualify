@@ -379,10 +379,10 @@ type PlayerScoreRow struct {
 }
 
 type PlayerScorePlayerRow struct {
-	PlayerID      string `db:"player_id"`
-	Score         int64  `db:"score"`
-	RowNum        int64  `db:"row_num"`
-	DisplayName   string `db:"display_name"`
+	PlayerID    string `db:"player_id"`
+	Score       int64  `db:"score"`
+	RowNum      int64  `db:"row_num"`
+	DisplayName string `db:"display_name"`
 }
 
 type TenantsAddHandlerResult struct {
