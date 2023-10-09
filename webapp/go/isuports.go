@@ -1238,7 +1238,7 @@ func playerHandler(c echo.Context) error {
 		args = append(args, compID)
 	}
 	args = append(args, p.ID)
-	if err := adminDB.GetContext(
+	if err := adminDB.SelectContext(
 		ctx,
 		&pss,
 		query,
