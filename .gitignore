@@ -1,2 +1,3 @@
 initial_data.tar.gz
 .vscode
+./webapp/sql/tenant_data_dump.sql
