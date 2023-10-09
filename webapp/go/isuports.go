@@ -429,7 +429,7 @@ func authorizePlayer(ctx context.Context, id string) error {
 	}
 	if player == nil {
 		// 存在しないプレイヤー
-		return echo.NewHTTPError(http.StatusNotFound, "player not found")
+		return echo.NewHTTPError(http.StatusUnauthorized, "player not found")
 	}
 	if player.IsDisqualified {
 		return echo.NewHTTPError(http.StatusForbidden, "player is disqualified")
