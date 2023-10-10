@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -137,6 +138,9 @@ func Run() {
 	// ベンチマーカー向けAPI
 	e.POST("/initialize", initializeHandler)
 
+	// 開発者向けAPI
+	e.GET("/info", developerInfoHandler)
+
 	e.HTTPErrorHandler = errorResponseHandler
 
 	adminDB, err = connectAdminDB()
@@ -147,11 +151,137 @@ func Run() {
 	adminDB.SetMaxOpenConns(50)
 	defer adminDB.Close()
 
+	// initialize cache
+	rankingCache = *NewRankingCache(3000)
+	playerCache = *NewPlayerCache(50000)
+	tenantCache = *NewTenantCache(200)
+
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
 	serverPort := fmt.Sprintf(":%s", port)
 	e.Logger.Fatal(e.Start(serverPort))
 }
+
+// cache
+
+var rankingCache RankingCache
+
+type RankingCache struct {
+	dataMutex       sync.RWMutex
+	data            map[string][]CompetitionRank
+	updateCacheTime map[string]time.Time
+
+	dbMutex      sync.RWMutex
+	updateDBTime map[string]time.Time
+}
+
+func NewRankingCache(initialMapSize int) *RankingCache {
+	return &RankingCache{
+		data:            make(map[string][]CompetitionRank, initialMapSize),
+		updateCacheTime: make(map[string]time.Time, initialMapSize),
+		updateDBTime:    make(map[string]time.Time, initialMapSize),
+	}
+}
+
+func (r *RankingCache) StoreRankingCache(competitionID string, ranking []CompetitionRank, now time.Time) {
+	r.dataMutex.Lock()
+	defer r.dataMutex.Unlock()
+	r.data[competitionID] = ranking
+	r.updateCacheTime[competitionID] = now
+}
+
+var (
+	loadRankingCacheCallCount      int
+	loadValidRankingCacheCallCount int
+)
+
+func (r *RankingCache) LoadRankingCache(competitionID string) (ranking []CompetitionRank, found bool, expired bool) {
+	loadRankingCacheCallCount++
+	rank, found, cacheTime := func() ([]CompetitionRank, bool, time.Time) {
+		r.dataMutex.RLock()
+		defer r.dataMutex.RUnlock()
+		rank, found := r.data[competitionID]
+		var cacheTime time.Time
+		if found {
+			cacheTime = r.updateCacheTime[competitionID]
+		}
+		return rank, found, cacheTime
+	}()
+	if !found {
+		return nil, false, false
+	}
+	expired = func() bool {
+		r.dbMutex.RLock()
+		defer r.dbMutex.RUnlock()
+		dbTime := r.updateDBTime[competitionID]
+		return dbTime.After(cacheTime)
+	}()
+
+	if found && !expired {
+		loadValidRankingCacheCallCount++
+	}
+	return rank, true, expired
+}
+
+func (r *RankingCache) StoreDBUpdateTime(competitionID string, now time.Time) {
+	r.dbMutex.Lock()
+	defer r.dbMutex.Unlock()
+	r.updateDBTime[competitionID] = now
+}
+
+var playerCache PlayerCache
+
+type PlayerCache struct {
+	data  map[string]PlayerDetail
+	mutex sync.RWMutex
+}
+
+func NewPlayerCache(initialMapSize int) *PlayerCache {
+	return &PlayerCache{
+		data: make(map[string]PlayerDetail, initialMapSize),
+	}
+}
+
+func (p *PlayerCache) StorePlayerCache(player PlayerDetail) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.data[player.ID] = player
+}
+
+func (p *PlayerCache) LoadPlayerCache(playerID string) (PlayerDetail, bool) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	player, found := p.data[playerID]
+	return player, found
+}
+
+var tenantCache TenantCache
+
+type TenantCache struct {
+	data  map[string]TenantRow
+	mutex sync.RWMutex
+}
+
+func NewTenantCache(initialMapSize int) *TenantCache {
+	return &TenantCache{
+		data: make(map[string]TenantRow, initialMapSize),
+	}
+}
+
+func (t *TenantCache) Store(tenant TenantRow) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	t.data[tenant.Name] = tenant
+}
+
+func (t *TenantCache) Load(tenantName string) (TenantRow, bool) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	tenant, found := t.data[tenantName]
+	return tenant, found
+}
+
+var insertScoreMutex sync.Mutex
 
 // エラー処理関数
 func errorResponseHandler(err error, c echo.Context) {
@@ -286,8 +416,12 @@ func retrieveTenantRowFromHeader(c echo.Context) (*TenantRow, error) {
 		}, nil
 	}
 
-	// テナントの存在確認
 	var tenant TenantRow
+	tenant, found := tenantCache.Load(tenantName)
+	if found {
+		return &tenant, nil
+	}
+	// テナントの存在確認
 	if err := adminDB.GetContext(
 		context.Background(),
 		&tenant,
@@ -296,6 +430,7 @@ func retrieveTenantRowFromHeader(c echo.Context) (*TenantRow, error) {
 	); err != nil {
 		return nil, fmt.Errorf("failed to Select tenant: name=%s, %w", tenantName, err)
 	}
+	tenantCache.Store(tenant)
 	return &tenant, nil
 }
 
@@ -323,12 +458,12 @@ type PlayerRow struct {
 }
 
 // 参加者を取得する
-func retrievePlayer(ctx context.Context, id string) (*PlayerRow, error) {
-	var p PlayerRow
-	if err := adminDB.GetContext(ctx, &p, "SELECT * FROM player WHERE id = ?", id); err != nil {
-		return nil, fmt.Errorf("error Select player: id=%s, %w", id, err)
+func retrievePlayer(ctx context.Context, id string) (*PlayerDetail, error) {
+	player, found := playerCache.LoadPlayerCache(id)
+	if found {
+		return &player, nil
 	}
-	return &p, nil
+	return nil, nil
 }
 
 // 参加者を認可する
@@ -336,10 +471,11 @@ func retrievePlayer(ctx context.Context, id string) (*PlayerRow, error) {
 func authorizePlayer(ctx context.Context, id string) error {
 	player, err := retrievePlayer(ctx, id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusUnauthorized, "player not found")
-		}
-		return fmt.Errorf("error retrievePlayer from viewer: %w", err)
+		return fmt.Errorf("error retrievePlayer: %w", err)
+	}
+	if player == nil {
+		// 存在しないプレイヤー
+		return echo.NewHTTPError(http.StatusUnauthorized, "player not found")
 	}
 	if player.IsDisqualified {
 		return echo.NewHTTPError(http.StatusForbidden, "player is disqualified")
@@ -379,15 +515,10 @@ type PlayerScoreRow struct {
 }
 
 type PlayerScorePlayerRow struct {
-	TenantID      int64  `db:"tenant_id"`
-	ID            string `db:"id"`
-	PlayerID      string `db:"player_id"`
-	CompetitionID string `db:"competition_id"`
-	Score         int64  `db:"score"`
-	RowNum        int64  `db:"row_num"`
-	DisplayName   string `db:"display_name"`
-	CreatedAt     int64  `db:"created_at"`
-	UpdatedAt     int64  `db:"updated_at"`
+	PlayerID    string `db:"player_id"`
+	Score       int64  `db:"score"`
+	RowNum      int64  `db:"row_num"`
+	DisplayName string `db:"display_name"`
 }
 
 type TenantsAddHandlerResult struct {
@@ -682,6 +813,14 @@ func playersAddHandler(c echo.Context) error {
 		return fmt.Errorf("error bulk insert players: %w", err)
 	}
 
+	for _, p := range pds {
+		playerCache.StorePlayerCache(PlayerDetail{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			IsDisqualified: p.IsDisqualified,
+		})
+	}
+
 	res := PlayersAddHandlerResult{
 		Players: pds,
 	}
@@ -719,18 +858,28 @@ func playerDisqualifiedHandler(c echo.Context) error {
 	}
 	p, err := retrievePlayer(ctx, playerID)
 	if err != nil {
-		// 存在しないプレイヤー
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "player not found")
-		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
 	}
+	if p == nil {
+		// 存在しないプレイヤー
+		return echo.NewHTTPError(http.StatusNotFound, "player not found")
+	}
+
+	// cacheを更新する
+	// 遅延しても良いのでgoroutineで更新する
+	go func(p *PlayerDetail) {
+		playerCache.StorePlayerCache(PlayerDetail{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			IsDisqualified: true,
+		})
+	}(p)
 
 	res := PlayerDisqualifiedHandlerResult{
 		Player: PlayerDetail{
 			ID:             p.ID,
 			DisplayName:    p.DisplayName,
-			IsDisqualified: p.IsDisqualified,
+			IsDisqualified: true,
 		},
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
@@ -1010,24 +1159,63 @@ func competitionScoreHandler(c echo.Context) error {
 	}
 	stmt := fmt.Sprintf("INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES %s",
 		strings.Join(valueStrings, ","))
-	tx, err := adminDB.BeginTx(ctx, nil)
+
+	err = func() error {
+		insertScoreMutex.Lock()
+		defer insertScoreMutex.Unlock()
+		tx, err := adminDB.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
+			v.tenantID,
+			competitionID,
+		); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
+		}
+		if _, err := tx.Exec(stmt, valueArgs...); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("error bulk insert player_scores: %w", err)
+		}
+		tx.Commit()
+		return nil
+	}()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return err
 	}
-	if _, err := tx.ExecContext(
-		ctx,
-		"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
-		v.tenantID,
-		competitionID,
-	); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
-	}
-	if _, err := tx.Exec(stmt, valueArgs...); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("error bulk insert player_scores: %w", err)
-	}
-	tx.Commit()
+
+	rankingCache.StoreDBUpdateTime(comp.ID, time.Now())
+	go func() {
+		ranks := make([]CompetitionRank, 0, len(playerScoreRows))
+		for _, ps := range playerScoreRows {
+			player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
+			ranks = append(ranks, CompetitionRank{
+				Score:             ps.Score,
+				PlayerID:          ps.PlayerID,
+				PlayerDisplayName: player.DisplayName,
+				RowNum:            ps.RowNum,
+			})
+		}
+		sort.Slice(ranks, func(i, j int) bool {
+			if ranks[i].Score == ranks[j].Score {
+				return ranks[i].RowNum < ranks[j].RowNum
+			}
+			return ranks[i].Score > ranks[j].Score
+		})
+		pagedRanks := make([]CompetitionRank, 0, len(playerScoreRows))
+		for i, rank := range ranks {
+			pagedRanks = append(pagedRanks, CompetitionRank{
+				Rank:              int64(i + 1),
+				Score:             rank.Score,
+				PlayerID:          rank.PlayerID,
+				PlayerDisplayName: rank.PlayerDisplayName,
+			})
+		}
+		rankingCache.StoreRankingCache(comp.ID, pagedRanks, time.Now())
+	}()
 
 	return c.JSON(http.StatusOK, SuccessResult{
 		Status: true,
@@ -1122,10 +1310,11 @@ func playerHandler(c echo.Context) error {
 	}
 	p, err := retrievePlayer(ctx, playerID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "player not found")
-		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
+	}
+	if p == nil {
+		// 存在しないプレイヤー
+		return echo.NewHTTPError(http.StatusNotFound, "player not found")
 	}
 	cs := []CompetitionRow{}
 	if err := adminDB.SelectContext(
@@ -1255,52 +1444,50 @@ func competitionRankingHandler(c echo.Context) error {
 		}
 	}
 
-	query := `
-	SELECT ps.*, p.display_name
-	FROM player p
-	JOIN player_score ps
-		ON ps.tenant_id = ?
-		AND ps.competition_id = ?
-		AND ps.player_id = p.id
-	`
-	pss := []PlayerScorePlayerRow{}
-	err = func() error {
-		if err := adminDB.SelectContext(
-			ctx,
-			&pss,
-			query,
-			tenant.ID,
-			competitionID,
-		); err != nil {
-			return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
+	var ranks []CompetitionRank
+	ranks, found, expired := rankingCache.LoadRankingCache(competitionID)
+	if !found || expired {
+		query := `
+		SELECT ps.score, ps.player_id, ps.row_num, p.display_name
+		FROM player p
+		JOIN player_score ps
+			ON ps.tenant_id = ?
+			AND ps.competition_id = ?
+			AND ps.player_id = p.id
+		`
+		pss := []PlayerScorePlayerRow{}
+		err = func() error {
+			if err := adminDB.SelectContext(
+				ctx,
+				&pss,
+				query,
+				tenant.ID,
+				competitionID,
+			); err != nil {
+				return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
 		}
-		return nil
-	}()
-	if err != nil {
-		return err
-	}
-	ranks := make([]CompetitionRank, 0, len(pss))
-	scoredPlayerSet := make(map[string]struct{}, len(pss))
-	for _, ps := range pss {
-		// player_scoreが同一player_id内ではrow_numの降順でソートされているので
-		// 現れたのが2回目以降のplayer_idはより大きいrow_numでスコアが出ているとみなせる
-		if _, ok := scoredPlayerSet[ps.PlayerID]; ok {
-			continue
+		ranks = make([]CompetitionRank, 0, len(pss))
+		for _, ps := range pss {
+			ranks = append(ranks, CompetitionRank{
+				Score:             ps.Score,
+				PlayerID:          ps.PlayerID,
+				PlayerDisplayName: ps.DisplayName,
+				RowNum:            ps.RowNum,
+			})
 		}
-		scoredPlayerSet[ps.PlayerID] = struct{}{}
-		ranks = append(ranks, CompetitionRank{
-			Score:             ps.Score,
-			PlayerID:          ps.PlayerID,
-			PlayerDisplayName: ps.DisplayName,
-			RowNum:            ps.RowNum,
+		sort.Slice(ranks, func(i, j int) bool {
+			if ranks[i].Score == ranks[j].Score {
+				return ranks[i].RowNum < ranks[j].RowNum
+			}
+			return ranks[i].Score > ranks[j].Score
 		})
 	}
-	sort.Slice(ranks, func(i, j int) bool {
-		if ranks[i].Score == ranks[j].Score {
-			return ranks[i].RowNum < ranks[j].RowNum
-		}
-		return ranks[i].Score > ranks[j].Score
-	})
+
 	pagedRanks := make([]CompetitionRank, 0, 100)
 	for i, rank := range ranks {
 		if int64(i) < rankAfter {
@@ -1455,18 +1642,18 @@ func meHandler(c echo.Context) error {
 	ctx := context.Background()
 	p, err := retrievePlayer(ctx, v.playerID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return c.JSON(http.StatusOK, SuccessResult{
-				Status: true,
-				Data: MeHandlerResult{
-					Tenant:   td,
-					Me:       nil,
-					Role:     RoleNone,
-					LoggedIn: false,
-				},
-			})
-		}
 		return fmt.Errorf("error retrievePlayer: %w", err)
+	}
+	if p == nil {
+		return c.JSON(http.StatusOK, SuccessResult{
+			Status: true,
+			Data: MeHandlerResult{
+				Tenant:   td,
+				Me:       nil,
+				Role:     RoleNone,
+				LoggedIn: false,
+			},
+		})
 	}
 
 	return c.JSON(http.StatusOK, SuccessResult{
@@ -1497,8 +1684,103 @@ func initializeHandler(c echo.Context) error {
 	if err != nil {
 		return fmt.Errorf("error exec.Command: %s %e", string(out), err)
 	}
+
+	ctx := context.Background()
+
+	// playerCacheに初期データを保存する
+	// initializeで終わらせたいので同期的に処理する
+	var pls []PlayerRow
+	if err := adminDB.SelectContext(
+		ctx,
+		&pls,
+		"SELECT * FROM player",
+	); err != nil {
+		return fmt.Errorf("error Select player: %w", err)
+	}
+	go func() {
+		cs := []CompetitionRow{}
+		if err := adminDB.SelectContext(
+			ctx,
+			&cs,
+			"SELECT * FROM competition",
+		); err != nil {
+			c.Logger().Errorf("error Select competition: %w", err)
+			return
+		}
+
+		for _, comp := range cs {
+			pss := []PlayerScoreRow{}
+			if err := adminDB.SelectContext(
+				ctx,
+				&pss,
+				"SELECT * FROM player_score WHERE competition_id  = ?",
+				comp.ID,
+			); err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					c.Logger().Errorf("error Select player_scores: %w", err)
+					return
+				}
+			}
+
+			go func(pss []PlayerScoreRow, comp CompetitionRow) {
+				ranks := make([]CompetitionRank, 0, len(pss))
+				for _, ps := range pss {
+					player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
+					ranks = append(ranks, CompetitionRank{
+						Score:             ps.Score,
+						PlayerID:          ps.PlayerID,
+						PlayerDisplayName: player.DisplayName,
+						RowNum:            ps.RowNum,
+					})
+				}
+				sort.Slice(ranks, func(i, j int) bool {
+					if ranks[i].Score == ranks[j].Score {
+						return ranks[i].RowNum < ranks[j].RowNum
+					}
+					return ranks[i].Score > ranks[j].Score
+				})
+				pagedRanks := make([]CompetitionRank, 0, len(pss))
+				for i, rank := range ranks {
+					pagedRanks = append(pagedRanks, CompetitionRank{
+						Rank:              int64(i + 1),
+						Score:             rank.Score,
+						PlayerID:          rank.PlayerID,
+						PlayerDisplayName: rank.PlayerDisplayName,
+					})
+				}
+
+				rankingCache.StoreDBUpdateTime(comp.ID, time.Now().Add(-time.Second)) // store cacheするときより前ならなんでもいい
+				rankingCache.StoreRankingCache(comp.ID, pagedRanks, time.Now())
+			}(pss, comp)
+		}
+	}()
+	for _, p := range pls {
+		playerCache.StorePlayerCache(PlayerDetail{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			IsDisqualified: p.IsDisqualified,
+		})
+	}
+
 	res := InitializeHandlerResult{
 		Lang: "go",
+	}
+	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
+}
+
+type DeveloperInfo struct {
+	LoadRankingCacheCallCount      int `json:"load_ranking_cache_call_count"`
+	LoadValidRankingCacheCallCount int `json:"load_valid_ranking_cache_call_count"`
+}
+
+// 開発者向けAPI
+// GET /info
+// 好きなときに呼ぶ
+// 知りたいデータを返す
+func developerInfoHandler(c echo.Context) error {
+	res := DeveloperInfo{
+		LoadRankingCacheCallCount:      loadRankingCacheCallCount,
+		LoadValidRankingCacheCallCount: loadValidRankingCacheCallCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
 }
