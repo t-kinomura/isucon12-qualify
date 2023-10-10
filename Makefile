@@ -6,8 +6,7 @@ deploy:
 	sudo systemctl restart isuports.service
 
 bench-prepare:
-	sudo rm -f /var/log/mysql/mysql-slow.log
-	sudo systemctl restart mysql.service
+	echo "noting to do"
 
 bench-result:
 	mkdir -p alp/dump
