@@ -189,10 +189,11 @@ func (r *RankingCache) StoreRankingCache(competitionID string, ranking []Competi
 	r.updateCacheTime[competitionID] = now
 }
 
-var locdLankingCacheCallCount int
+var loadRankingCacheCallCount int
+var loadValidRankingCacheCallCount int
 
 func (r *RankingCache) LoadRankingCache(competitionID string) (ranking []CompetitionRank, found bool, expired bool) {
-	locdLankingCacheCallCount++
+	loadRankingCacheCallCount++
 	rank, found, cacheTime := func() ([]CompetitionRank, bool, time.Time) {
 		r.dataMutex.RLock()
 		defer r.dataMutex.RUnlock()
@@ -213,6 +214,9 @@ func (r *RankingCache) LoadRankingCache(competitionID string) (ranking []Competi
 		return dbTime.After(cacheTime)
 	}()
 
+	if (found && !expired) {
+		loadValidRankingCacheCallCount++
+	}
 	return rank, true, expired
 }
 
@@ -1715,6 +1719,7 @@ func initializeHandler(c echo.Context) error {
 
 type DeveloperInfo struct {
 	LoadRankingCacheCallCount int `json:"load_ranking_cache_call_count"`
+	LoadValidRankingCacheCallCount int `json:"load_valid_ranking_cache_call_count"`
 }
 
 // 開発者向けAPI
@@ -1723,7 +1728,8 @@ type DeveloperInfo struct {
 // 知りたいデータを返す
 func developerInfoHandler(c echo.Context) error {
 	res := DeveloperInfo{
-		LoadRankingCacheCallCount: locdLankingCacheCallCount,
+		LoadRankingCacheCallCount: loadRankingCacheCallCount,
+		LoadValidRankingCacheCallCount: loadValidRankingCacheCallCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
 }
