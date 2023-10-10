@@ -154,6 +154,7 @@ func Run() {
 	// initialize cache
 	rankingCache = *NewRankingCache(3000)
 	playerCache = *NewPlayerCache(50000)
+	tenantCache = *NewTenantCache(200)
 
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
@@ -252,6 +253,32 @@ func (p *PlayerCache) LoadPlayerCache(playerID string) (PlayerDetail, bool) {
 	defer p.mutex.RUnlock()
 	player, found := p.data[playerID]
 	return player, found
+}
+
+var tenantCache TenantCache
+
+type TenantCache struct {
+	data map[string]TenantRow
+	mutex sync.RWMutex
+}
+
+func NewTenantCache(initialMapSize int) *TenantCache {
+	return &TenantCache{
+		data: make(map[string]TenantRow, initialMapSize),
+	}
+}
+
+func (t *TenantCache) Store(tenant TenantRow) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	t.data[tenant.Name] = tenant
+}
+
+func (t *TenantCache) Load(tenantName string) (TenantRow, bool) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	tenant, found := t.data[tenantName]
+	return tenant, found
 }
 
 // エラー処理関数
@@ -387,8 +414,12 @@ func retrieveTenantRowFromHeader(c echo.Context) (*TenantRow, error) {
 		}, nil
 	}
 
-	// テナントの存在確認
 	var tenant TenantRow
+	tenant, found := tenantCache.Load(tenantName)
+	if found {
+		return &tenant, nil
+	}
+	// テナントの存在確認
 	if err := adminDB.GetContext(
 		context.Background(),
 		&tenant,
@@ -397,6 +428,7 @@ func retrieveTenantRowFromHeader(c echo.Context) (*TenantRow, error) {
 	); err != nil {
 		return nil, fmt.Errorf("failed to Select tenant: name=%s, %w", tenantName, err)
 	}
+	tenantCache.Store(tenant)
 	return &tenant, nil
 }
 
