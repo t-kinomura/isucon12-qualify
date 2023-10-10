@@ -2,7 +2,7 @@ services:
   webapp:
     build: ./go
     environment:
-      ISUCON_DB_HOST: 10.0.1.222
+      ISUCON_DB_HOST: 10.0.1.49
       ISUCON_DB_2_HOST: 10.0.1.97
       ISUCON_DB_PORT: 3306
       ISUCON_DB_USER: isucon
