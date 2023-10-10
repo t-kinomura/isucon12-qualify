@@ -3,7 +3,7 @@
 set -ex
 cd `dirname $0`
 
-ISUCON_DB_HOST=${ISUCON_DB_HOST:-10.0.1.49} # isucon12-qualify2 private ip
+ISUCON_DB_HOST=${ISUCON_DB_HOST:-10.0.1.222} # isucon12-qualify1 private ip
 ISUCON_DB_2_HOST=${ISUCON_DB_2_HOST:-10.0.1.97} # isucon12-qualify3 private ip
 ISUCON_DB_PORT=${ISUCON_DB_PORT:-3306}
 ISUCON_DB_USER=${ISUCON_DB_USER:-isucon}
