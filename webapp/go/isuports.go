@@ -761,7 +761,7 @@ func playersListHandler(c echo.Context) error {
 	}
 
 	var pls []PlayerRow
-	if err := adminDB.SelectContext(
+	if err := scoreDB.SelectContext(
 		ctx,
 		&pls,
 		"SELECT * FROM player WHERE tenant_id=? ORDER BY created_at DESC",
