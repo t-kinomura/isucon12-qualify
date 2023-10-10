@@ -1304,6 +1304,19 @@ type CompetitionScoreRow struct {
 	Score int64  `db:"score"`
 }
 
+func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]CompetitionRow, error) {
+	cs := []CompetitionRow{}
+	if err := adminDB.SelectContext(
+		ctx,
+		&cs,
+		"SELECT * FROM competition WHERE tenant_id=? ORDER BY created_at DESC",
+		tenantID,
+	); err != nil {
+		return nil, fmt.Errorf("error Select competition: %w", err)
+	}
+	return cs, nil
+}
+
 // 参加者向けAPI
 // GET /api/player/player/:player_id
 // 参加者の詳細情報を取得する
@@ -1334,14 +1347,9 @@ func playerHandler(c echo.Context) error {
 		// 存在しないプレイヤー
 		return echo.NewHTTPError(http.StatusNotFound, "player not found")
 	}
-	cs := []CompetitionRow{}
-	if err := adminDB.SelectContext(
-		ctx,
-		&cs,
-		"SELECT * FROM competition WHERE tenant_id = ? ORDER BY created_at ASC",
-		v.tenantID,
-	); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("error Select competition: %w", err)
+	cs, err := retrieveCompetitionRows(ctx, v.tenantID)
+	if err != nil {
+		return err
 	}
 
 	compIDs := make([]string, 0, len(cs))
