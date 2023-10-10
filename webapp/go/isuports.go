@@ -138,6 +138,9 @@ func Run() {
 	// ベンチマーカー向けAPI
 	e.POST("/initialize", initializeHandler)
 
+	// 開発者向けAPI
+	e.GET("/info", developerInfoHandler)
+
 	e.HTTPErrorHandler = errorResponseHandler
 
 	adminDB, err = connectAdminDB()
@@ -186,7 +189,10 @@ func (r *RankingCache) StoreRankingCache(competitionID string, ranking []Competi
 	r.updateCacheTime[competitionID] = now
 }
 
+var locdLankingCacheCallCount int
+
 func (r *RankingCache) LoadRankingCache(competitionID string) (ranking []CompetitionRank, found bool, expired bool) {
+	locdLankingCacheCallCount++
 	rank, found, cacheTime := func() ([]CompetitionRank, bool, time.Time) {
 		r.dataMutex.RLock()
 		defer r.dataMutex.RUnlock()
@@ -1703,6 +1709,21 @@ func initializeHandler(c echo.Context) error {
 
 	res := InitializeHandlerResult{
 		Lang: "go",
+	}
+	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
+}
+
+type DeveloperInfo struct {
+	LoadRankingCacheCallCount int `json:"load_ranking_cache_call_count"`
+}
+
+// 開発者向けAPI
+// GET /info
+// 好きなときに呼ぶ
+// 知りたいデータを返す
+func developerInfoHandler(c echo.Context) error {
+	res := DeveloperInfo{
+		LoadRankingCacheCallCount: locdLankingCacheCallCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
 }
