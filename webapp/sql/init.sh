@@ -4,6 +4,7 @@ set -ex
 cd `dirname $0`
 
 ISUCON_DB_HOST=${ISUCON_DB_HOST:-10.0.1.49} # isucon12-qualify2 private ip
+ISUCON_DB_2_HOST=${ISUCON_DB_2_HOST:-10.0.1.97} # isucon12-qualify3 private ip
 ISUCON_DB_PORT=${ISUCON_DB_PORT:-3306}
 ISUCON_DB_USER=${ISUCON_DB_USER:-isucon}
 ISUCON_DB_PASSWORD=${ISUCON_DB_PASSWORD:-isucon}
@@ -20,5 +21,12 @@ mysql -u"$ISUCON_DB_USER" \
 		-p"$ISUCON_DB_PASSWORD" \
 		--host "$ISUCON_DB_HOST" \
 		--port "$ISUCON_DB_PORT" \
-		"$ISUCON_DB_NAME" < tenant_data_dump.sql
+		"$ISUCON_DB_NAME" < competition_dump.sql
+
+# 2台目
+mysql -u"$ISUCON_DB_USER" \
+		-p"$ISUCON_DB_PASSWORD" \
+		--host "$ISUCON_DB_2_HOST" \
+		--port "$ISUCON_DB_PORT" \
+		"$ISUCON_DB_NAME" < player_player_score_dump.sql
 

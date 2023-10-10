@@ -2,19 +2,17 @@ deploy:
 	cp -r ./webapp/go ../webapp
 	cp ./webapp/docker-compose-go.yml ../webapp
 	cp ./webapp/sql/init.sh ../webapp/sql/init.sh
-	cp ./webapp/sql/tenant_data_dump.sql ../webapp/sql/tenant_data_dump.sql
 	cp ./webapp/sql/init.sql ../webapp/sql/init.sql
 	sudo systemctl restart isuports.service
 
 bench-prepare:
-	sudo rm -f /var/log/nginx/access.log
-	sudo systemctl reload nginx.service
+	echo "noting to do"
 
 bench-result:
 	mkdir -p alp/dump
 	cat /var/log/nginx/access.log \
 	| alp ltsv \
-	-m '/api/organizer/player/[0-9a-zA-Z]+/disqualified$$,/api/organizer/competition/[0-9a-zA-Z]+/finish$$,/api/organizer/competition/[0-9a-zA-Z]+/score$$,/api/player/competition/[0-9a-zA-Z]+/ranking$$,/api/player/player/[0-9a-zA-Z]+$$' \
+	-m '/api/organizer/player/[0-9a-zA-Z\-]+/disqualified$$,/api/organizer/competition/[0-9a-zA-Z\-]+/finish$$,/api/organizer/competition/[0-9a-zA-Z\-]+/score$$,/api/player/competition/[0-9a-zA-Z\-]+/ranking$$,/api/player/player/[0-9a-zA-Z\-]+$$' \
 	--sort avg -r --dump alp/dump/`git show --format='%h' --no-patch` > /dev/null
 
 latest-alp:

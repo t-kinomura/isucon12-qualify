@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -28,7 +27,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
-	"github.com/oklog/ulid"
+	"github.com/google/uuid"
 )
 
 const (
@@ -47,6 +46,7 @@ var (
 	tenantNameRegexp = regexp.MustCompile(`^[a-z][a-z0-9-]{0,61}[a-z0-9]$`)
 
 	adminDB *sqlx.DB
+	scoreDB *sqlx.DB
 )
 
 // 環境変数を取得する、なければデフォルト値を返す
@@ -70,12 +70,22 @@ func connectAdminDB() (*sqlx.DB, error) {
 	return sqlx.Open("mysql", dsn)
 }
 
+// 管理用DBに接続する
+func connectScoreDB() (*sqlx.DB, error) {
+	config := mysql.NewConfig()
+	config.Net = "tcp"
+	config.Addr = getEnv("ISUCON_DB_2_HOST", "10.0.1.97") + ":" + getEnv("ISUCON_DB_PORT", "3306")
+	config.User = getEnv("ISUCON_DB_USER", "isucon")
+	config.Passwd = getEnv("ISUCON_DB_PASSWORD", "isucon")
+	config.DBName = getEnv("ISUCON_DB_NAME", "isuports")
+	config.ParseTime = true
+	dsn := config.FormatDSN()
+	return sqlx.Open("mysql", dsn)
+}
+
 // システム全体で一意なIDを生成する
 func dispenseID(ctx context.Context) (string, error) {
-	t := time.Now()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
-	id := ulid.MustNew(ulid.Timestamp(t), entropy)
-	return id.String(), nil
+	return uuid.NewString(), nil
 }
 
 // 全APIにCache-Control: privateを設定する
@@ -145,11 +155,19 @@ func Run() {
 
 	adminDB, err = connectAdminDB()
 	if err != nil {
-		e.Logger.Fatalf("failed to connect db: %v", err)
+		e.Logger.Fatalf("failed to connect admin db: %v", err)
 		return
 	}
 	adminDB.SetMaxOpenConns(50)
 	defer adminDB.Close()
+
+	scoreDB, err = connectScoreDB()
+	if err != nil {
+		e.Logger.Fatalf("failed to connect score db: %v", err)
+		return
+	}
+	scoreDB.SetMaxOpenConns(50)
+	defer scoreDB.Close()
 
 	// initialize cache
 	rankingCache = *NewRankingCache(3000)
@@ -739,7 +757,7 @@ func playersListHandler(c echo.Context) error {
 	}
 
 	var pls []PlayerRow
-	if err := adminDB.SelectContext(
+	if err := scoreDB.SelectContext(
 		ctx,
 		&pls,
 		"SELECT * FROM player WHERE tenant_id=? ORDER BY created_at DESC",
@@ -809,7 +827,7 @@ func playersAddHandler(c echo.Context) error {
 	}
 	stmt := fmt.Sprintf("INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES %s",
 		strings.Join(valueStrings, ","))
-	if _, err := adminDB.Exec(stmt, valueArgs...); err != nil {
+	if _, err := scoreDB.Exec(stmt, valueArgs...); err != nil {
 		return fmt.Errorf("error bulk insert players: %w", err)
 	}
 
@@ -846,7 +864,7 @@ func playerDisqualifiedHandler(c echo.Context) error {
 	playerID := c.Param("player_id")
 
 	now := time.Now().Unix()
-	if _, err := adminDB.ExecContext(
+	if _, err := scoreDB.ExecContext(
 		ctx,
 		"UPDATE player SET is_disqualified = ?, updated_at = ? WHERE id = ?",
 		true, now, playerID,
@@ -986,7 +1004,7 @@ func competitionFinishHandler(c echo.Context) error {
 
 	scoredPlayerIDs := []string{}
 	// スコアを登録した参加者のIDを取得する
-	if err := adminDB.SelectContext(
+	if err := scoreDB.SelectContext(
 		ctx,
 		&scoredPlayerIDs,
 		"SELECT DISTINCT(player_id) FROM player_score WHERE tenant_id = ? AND competition_id = ?",
@@ -1133,7 +1151,7 @@ func competitionScoreHandler(c echo.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to fetch player count: %w", err)
 		}
-		if err := adminDB.GetContext(ctx, &dbPlayerCount, sql, params...); err != nil {
+		if err := scoreDB.GetContext(ctx, &dbPlayerCount, sql, params...); err != nil {
 			return fmt.Errorf("failed to fetch player count: %w", err)
 		}
 		if int64(len(playerScoreRows)) != dbPlayerCount {
@@ -1163,7 +1181,7 @@ func competitionScoreHandler(c echo.Context) error {
 	err = func() error {
 		insertScoreMutex.Lock()
 		defer insertScoreMutex.Unlock()
-		tx, err := adminDB.BeginTx(ctx, nil)
+		tx, err := scoreDB.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction: %w", err)
 		}
@@ -1286,6 +1304,19 @@ type CompetitionScoreRow struct {
 	Score int64  `db:"score"`
 }
 
+func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]CompetitionRow, error) {
+	cs := []CompetitionRow{}
+	if err := adminDB.SelectContext(
+		ctx,
+		&cs,
+		"SELECT * FROM competition WHERE tenant_id=? ORDER BY created_at DESC",
+		tenantID,
+	); err != nil {
+		return nil, fmt.Errorf("error Select competition: %w", err)
+	}
+	return cs, nil
+}
+
 // 参加者向けAPI
 // GET /api/player/player/:player_id
 // 参加者の詳細情報を取得する
@@ -1316,14 +1347,9 @@ func playerHandler(c echo.Context) error {
 		// 存在しないプレイヤー
 		return echo.NewHTTPError(http.StatusNotFound, "player not found")
 	}
-	cs := []CompetitionRow{}
-	if err := adminDB.SelectContext(
-		ctx,
-		&cs,
-		"SELECT * FROM competition WHERE tenant_id = ? ORDER BY created_at ASC",
-		v.tenantID,
-	); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("error Select competition: %w", err)
+	cs, err := retrieveCompetitionRows(ctx, v.tenantID)
+	if err != nil {
+		return err
 	}
 
 	compIDs := make([]string, 0, len(cs))
@@ -1342,7 +1368,7 @@ func playerHandler(c echo.Context) error {
 		args = append(args, compID)
 	}
 	args = append(args, p.ID)
-	if err := adminDB.SelectContext(
+	if err := scoreDB.SelectContext(
 		ctx,
 		&pss,
 		query,
@@ -1457,7 +1483,7 @@ func competitionRankingHandler(c echo.Context) error {
 		`
 		pss := []PlayerScorePlayerRow{}
 		err = func() error {
-			if err := adminDB.SelectContext(
+			if err := scoreDB.SelectContext(
 				ctx,
 				&pss,
 				query,
@@ -1690,7 +1716,7 @@ func initializeHandler(c echo.Context) error {
 	// playerCacheに初期データを保存する
 	// initializeで終わらせたいので同期的に処理する
 	var pls []PlayerRow
-	if err := adminDB.SelectContext(
+	if err := scoreDB.SelectContext(
 		ctx,
 		&pls,
 		"SELECT * FROM player",
@@ -1710,7 +1736,7 @@ func initializeHandler(c echo.Context) error {
 
 		for _, comp := range cs {
 			pss := []PlayerScoreRow{}
-			if err := adminDB.SelectContext(
+			if err := scoreDB.SelectContext(
 				ctx,
 				&pss,
 				"SELECT * FROM player_score WHERE competition_id  = ?",
