@@ -258,7 +258,7 @@ func (p *PlayerCache) LoadPlayerCache(playerID string) (PlayerDetail, bool) {
 var tenantCache TenantCache
 
 type TenantCache struct {
-	data map[string]TenantRow
+	data  map[string]TenantRow
 	mutex sync.RWMutex
 }
 
@@ -280,6 +280,8 @@ func (t *TenantCache) Load(tenantName string) (TenantRow, bool) {
 	tenant, found := t.data[tenantName]
 	return tenant, found
 }
+
+var insertScoreMutex sync.Mutex
 
 // エラー処理関数
 func errorResponseHandler(err error, c echo.Context) {
@@ -1157,24 +1159,34 @@ func competitionScoreHandler(c echo.Context) error {
 	}
 	stmt := fmt.Sprintf("INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES %s",
 		strings.Join(valueStrings, ","))
-	tx, err := adminDB.BeginTx(ctx, nil)
+
+	err = func() error {
+		insertScoreMutex.Lock()
+		defer insertScoreMutex.Unlock()
+		tx, err := adminDB.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
+			v.tenantID,
+			competitionID,
+		); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
+		}
+		if _, err := tx.Exec(stmt, valueArgs...); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("error bulk insert player_scores: %w", err)
+		}
+		tx.Commit()
+		return nil
+	}()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return err
 	}
-	if _, err := tx.ExecContext(
-		ctx,
-		"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
-		v.tenantID,
-		competitionID,
-	); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
-	}
-	if _, err := tx.Exec(stmt, valueArgs...); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("error bulk insert player_scores: %w", err)
-	}
-	tx.Commit()
+
 	rankingCache.StoreDBUpdateTime(comp.ID, time.Now())
 	go func() {
 		ranks := make([]CompetitionRank, 0, len(playerScoreRows))
