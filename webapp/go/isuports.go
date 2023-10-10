@@ -189,8 +189,10 @@ func (r *RankingCache) StoreRankingCache(competitionID string, ranking []Competi
 	r.updateCacheTime[competitionID] = now
 }
 
-var loadRankingCacheCallCount int
-var loadValidRankingCacheCallCount int
+var (
+	loadRankingCacheCallCount      int
+	loadValidRankingCacheCallCount int
+)
 
 func (r *RankingCache) LoadRankingCache(competitionID string) (ranking []CompetitionRank, found bool, expired bool) {
 	loadRankingCacheCallCount++
@@ -214,7 +216,7 @@ func (r *RankingCache) LoadRankingCache(competitionID string) (ranking []Competi
 		return dbTime.After(cacheTime)
 	}()
 
-	if (found && !expired) {
+	if found && !expired {
 		loadValidRankingCacheCallCount++
 	}
 	return rank, true, expired
@@ -1141,6 +1143,7 @@ func competitionScoreHandler(c echo.Context) error {
 		return fmt.Errorf("error bulk insert player_scores: %w", err)
 	}
 	tx.Commit()
+	rankingCache.StoreDBUpdateTime(comp.ID, time.Now())
 	go func() {
 		ranks := make([]CompetitionRank, 0, len(playerScoreRows))
 		for _, ps := range playerScoreRows {
@@ -1167,6 +1170,7 @@ func competitionScoreHandler(c echo.Context) error {
 				PlayerDisplayName: rank.PlayerDisplayName,
 			})
 		}
+		rankingCache.StoreRankingCache(comp.ID, pagedRanks, time.Now())
 	}()
 
 	return c.JSON(http.StatusOK, SuccessResult{
@@ -1674,7 +1678,7 @@ func initializeHandler(c echo.Context) error {
 				}
 			}
 
-			go func(pss []PlayerScoreRow) {
+			go func(pss []PlayerScoreRow, comp CompetitionRow) {
 				ranks := make([]CompetitionRank, 0, len(pss))
 				for _, ps := range pss {
 					player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
@@ -1700,7 +1704,10 @@ func initializeHandler(c echo.Context) error {
 						PlayerDisplayName: rank.PlayerDisplayName,
 					})
 				}
-			}(pss)
+
+				rankingCache.StoreDBUpdateTime(comp.ID, time.Now().Add(-time.Second)) // store cacheするときより前ならなんでもいい
+				rankingCache.StoreRankingCache(comp.ID, pagedRanks, time.Now())
+			}(pss, comp)
 		}
 	}()
 	for _, p := range pls {
@@ -1718,7 +1725,7 @@ func initializeHandler(c echo.Context) error {
 }
 
 type DeveloperInfo struct {
-	LoadRankingCacheCallCount int `json:"load_ranking_cache_call_count"`
+	LoadRankingCacheCallCount      int `json:"load_ranking_cache_call_count"`
 	LoadValidRankingCacheCallCount int `json:"load_valid_ranking_cache_call_count"`
 }
 
@@ -1728,7 +1735,7 @@ type DeveloperInfo struct {
 // 知りたいデータを返す
 func developerInfoHandler(c echo.Context) error {
 	res := DeveloperInfo{
-		LoadRankingCacheCallCount: loadRankingCacheCallCount,
+		LoadRankingCacheCallCount:      loadRankingCacheCallCount,
 		LoadValidRankingCacheCallCount: loadValidRankingCacheCallCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
