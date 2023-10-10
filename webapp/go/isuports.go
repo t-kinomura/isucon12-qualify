@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -28,7 +27,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
-	"github.com/oklog/ulid"
+	"github.com/google/uuid"
 )
 
 const (
@@ -86,10 +85,7 @@ func connectScoreDB() (*sqlx.DB, error) {
 
 // システム全体で一意なIDを生成する
 func dispenseID(ctx context.Context) (string, error) {
-	t := time.Now()
-	entropy := ulid.Monotonic(rand.New(rand.NewSource(t.UnixNano())), 0)
-	id := ulid.MustNew(ulid.Timestamp(t), entropy)
-	return id.String(), nil
+	return uuid.NewString(), nil
 }
 
 // 全APIにCache-Control: privateを設定する
