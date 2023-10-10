@@ -6,8 +6,8 @@ deploy:
 	sudo systemctl restart isuports.service
 
 bench-prepare:
-	sudo rm -f /var/log/nginx/access.log
-	sudo systemctl reload nginx.service
+	sudo rm -f /var/log/mysql/mysql-slow.log
+	sudo systemctl restart mysql.service
 
 bench-result:
 	mkdir -p alp/dump
