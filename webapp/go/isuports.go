@@ -181,6 +181,8 @@ func Run() {
 	rankingCache = *NewRankingCache(3000)
 	playerCache = *NewPlayerCache(50000)
 	tenantCache = *NewTenantCache(200)
+	playerScoreDetailCache = *NewPlayerScoreDetailCache(50000)
+	lastScorePostTimeCache = *NewLastScorePostTimeCache(2500)
 
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
