@@ -567,11 +567,10 @@ type PlayerScoreRow struct {
 	UpdatedAt     int64  `db:"updated_at"`
 }
 
-type PlayerScorePlayerRow struct {
+type PlayerIDScoreRowNum struct {
 	PlayerID    string `db:"player_id"`
 	Score       int64  `db:"score"`
 	RowNum      int64  `db:"row_num"`
-	DisplayName string `db:"display_name"`
 }
 
 type TenantsAddHandlerResult struct {
@@ -1522,14 +1521,11 @@ func competitionRankingHandler(c echo.Context) error {
 	ranks, found, expired := rankingCache.LoadRankingCache(competitionID)
 	if !found || expired {
 		query := `
-		SELECT ps.score, ps.player_id, ps.row_num, p.display_name
-		FROM player p
-		JOIN player_score ps
-			ON ps.tenant_id = ?
-			AND ps.competition_id = ?
-			AND ps.player_id = p.id
+		SELECT score, player_id, row_num
+		FROM player_score 
+		WHERE tenant_id = ? AND competition_id = ?
 		`
-		pss := []PlayerScorePlayerRow{}
+		pss := []PlayerIDScoreRowNum{}
 		err = func() error {
 			if err := scoreDB.SelectContext(
 				ctx,
@@ -1547,10 +1543,12 @@ func competitionRankingHandler(c echo.Context) error {
 		}
 		ranks = make([]CompetitionRank, 0, len(pss))
 		for _, ps := range pss {
+			// 見つからないことは考慮しなくていい
+			p, _ := playerCache.LoadPlayerCache(ps.PlayerID)
 			ranks = append(ranks, CompetitionRank{
 				Score:             ps.Score,
 				PlayerID:          ps.PlayerID,
-				PlayerDisplayName: ps.DisplayName,
+				PlayerDisplayName: p.DisplayName,
 				RowNum:            ps.RowNum,
 			})
 		}
