@@ -541,6 +541,11 @@ type CompetitionRow struct {
 	UpdatedAt    int64         `db:"updated_at"`
 }
 
+type CompetitionIDTitle struct {
+	ID           string        `db:"id"`
+	Title        string        `db:"title"`
+}
+
 // 大会を取得する
 func retrieveCompetition(ctx context.Context, id string) (*CompetitionRow, error) {
 	var c CompetitionRow
@@ -1333,12 +1338,12 @@ type CompetitionScoreRow struct {
 	Score int64  `db:"score"`
 }
 
-func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]CompetitionRow, error) {
-	cs := []CompetitionRow{}
+func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]CompetitionIDTitle, error) {
+	cs := []CompetitionIDTitle{}
 	if err := adminDB.SelectContext(
 		ctx,
 		&cs,
-		"SELECT * FROM competition WHERE tenant_id=? ORDER BY created_at DESC",
+		"SELECT id, title FROM competition WHERE tenant_id=? ORDER BY created_at DESC",
 		tenantID,
 	); err != nil {
 		return nil, fmt.Errorf("error Select competition: %w", err)
