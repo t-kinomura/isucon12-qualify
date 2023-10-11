@@ -387,25 +387,16 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 		)
 	}
 	tokenStr := cookie.Value
-
-	// keyFilename := getEnv("ISUCON_JWT_KEY_FILE", "../public.pem")
-	// keysrc, err := os.ReadFile(keyFilename)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("error os.ReadFile: keyFilename=%s: %w", keyFilename, err)
-	// }
-	// key, _, err := jwk.DecodePEM(keysrc)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("error jwk.DecodePEM: %w", err)
-	// }
-
 	var isuportsClaim IsuportsClaim
 	err = jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
-	// token2, err := jwt2.Parse(
-	// 	[]byte(tokenStr),
-	// 	jwt2.WithKey(jwa.RS256, key),
-	// )
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("error jwt.Parse: %s", err.Error()))
+	}
+	if isuportsClaim.ExpiresAt.Before(time.Now()) {
+		return nil, echo.NewHTTPError(
+			http.StatusUnauthorized,
+			fmt.Sprintf("jwt has been expired. %v", isuportsClaim.ExpiresAt),
+		)
 	}
 	if isuportsClaim.Subject == "" {
 		return nil, echo.NewHTTPError(
@@ -415,12 +406,6 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 	}
 
 	role := isuportsClaim.Role
-	// if !ok {
-	// 	return nil, echo.NewHTTPError(
-	// 		http.StatusUnauthorized,
-	// 		fmt.Sprintf("invalid token: role is not found: %s", tokenStr),
-	// 	)
-	// }
 	switch role {
 	case RoleAdmin, RoleOrganizer, RolePlayer:
 		break
