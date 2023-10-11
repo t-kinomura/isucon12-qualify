@@ -322,6 +322,7 @@ type PlayerScoreDetailCache struct {
 func NewPlayerScoreDetailCache(initialMapSize int) *PlayerScoreDetailCache {
 	return &PlayerScoreDetailCache{
 		data: make(map[string][]PlayerScoreDetail, initialMapSize),
+		cachedTime: make(map[string]time.Time, initialMapSize),
 	}
 }
 
