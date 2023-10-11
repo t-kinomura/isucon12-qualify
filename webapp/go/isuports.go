@@ -2,8 +2,11 @@ package isuports
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
 	"database/sql"
 	"encoding/csv"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -19,15 +22,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cristalhq/jwt/v5"
 	"github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/labstack/gommon/log"
-	"github.com/lestrrat-go/jwx/v2/jwa"
-	"github.com/lestrrat-go/jwx/v2/jwk"
-	"github.com/lestrrat-go/jwx/v2/jwt"
-	"github.com/google/uuid"
 )
 
 const (
@@ -168,6 +169,12 @@ func Run() {
 	}
 	scoreDB.SetMaxOpenConns(50)
 	defer scoreDB.Close()
+
+	isuoprtsVerifier, err = GetIsuportsVerifier()
+	if err != nil {
+		e.Logger.Fatalf("failed to create jwt verifier: %v", err)
+		return
+	}
 
 	// initialize cache
 	rankingCache = *NewRankingCache(3000)
@@ -334,6 +341,42 @@ type Viewer struct {
 	tenantID   int64
 }
 
+var isuoprtsVerifier *jwt.RSAlg
+
+func GetIsuportsVerifier() (*jwt.RSAlg, error) {
+	keyFilename := getEnv("ISUCON_JWT_KEY_FILE", "../public.pem")
+	pemBytes, err := os.ReadFile(keyFilename)
+	if err != nil {
+		return nil, fmt.Errorf("error os.ReadFile: keyFilename=%s: %w", keyFilename, err)
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return nil, errors.New("failed to decode PEM block containing public key")
+	}
+
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("not an RSA public key")
+	}
+
+	key := rsa.PublicKey{
+		N: rsaPub.N,
+		E: rsaPub.E,
+	}
+
+	return jwt.NewVerifierRS(jwt.RS256, &key)
+}
+
+type IsuportsClaim struct {
+	jwt.RegisteredClaims
+	Role string `json:"role"`
+}
+
 // リクエストヘッダをパースしてViewerを返す
 func parseViewer(c echo.Context) (*Viewer, error) {
 	cookie, err := c.Request().Cookie(cookieName)
@@ -345,41 +388,42 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 	}
 	tokenStr := cookie.Value
 
-	keyFilename := getEnv("ISUCON_JWT_KEY_FILE", "../public.pem")
-	keysrc, err := os.ReadFile(keyFilename)
-	if err != nil {
-		return nil, fmt.Errorf("error os.ReadFile: keyFilename=%s: %w", keyFilename, err)
-	}
-	key, _, err := jwk.DecodePEM(keysrc)
-	if err != nil {
-		return nil, fmt.Errorf("error jwk.DecodePEM: %w", err)
-	}
+	// keyFilename := getEnv("ISUCON_JWT_KEY_FILE", "../public.pem")
+	// keysrc, err := os.ReadFile(keyFilename)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("error os.ReadFile: keyFilename=%s: %w", keyFilename, err)
+	// }
+	// key, _, err := jwk.DecodePEM(keysrc)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("error jwk.DecodePEM: %w", err)
+	// }
 
-	token, err := jwt.Parse(
-		[]byte(tokenStr),
-		jwt.WithKey(jwa.RS256, key),
-	)
+	var isuportsClaim IsuportsClaim
+	err = jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+	// token2, err := jwt2.Parse(
+	// 	[]byte(tokenStr),
+	// 	jwt2.WithKey(jwa.RS256, key),
+	// )
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("error jwt.Parse: %s", err.Error()))
 	}
-	if token.Subject() == "" {
+	if isuportsClaim.Subject == "" {
 		return nil, echo.NewHTTPError(
 			http.StatusUnauthorized,
 			fmt.Sprintf("invalid token: subject is not found in token: %s", tokenStr),
 		)
 	}
 
-	var role string
-	tr, ok := token.Get("role")
-	if !ok {
-		return nil, echo.NewHTTPError(
-			http.StatusUnauthorized,
-			fmt.Sprintf("invalid token: role is not found: %s", tokenStr),
-		)
-	}
-	switch tr {
+	role := isuportsClaim.Role
+	// if !ok {
+	// 	return nil, echo.NewHTTPError(
+	// 		http.StatusUnauthorized,
+	// 		fmt.Sprintf("invalid token: role is not found: %s", tokenStr),
+	// 	)
+	// }
+	switch role {
 	case RoleAdmin, RoleOrganizer, RolePlayer:
-		role = tr.(string)
+		break
 	default:
 		return nil, echo.NewHTTPError(
 			http.StatusUnauthorized,
@@ -387,7 +431,7 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 		)
 	}
 	// aud は1要素でテナント名がはいっている
-	aud := token.Audience()
+	aud := isuportsClaim.Audience
 	if len(aud) != 1 {
 		return nil, echo.NewHTTPError(
 			http.StatusUnauthorized,
@@ -414,7 +458,7 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 
 	v := &Viewer{
 		role:       role,
-		playerID:   token.Subject(),
+		playerID:   isuportsClaim.Subject,
 		tenantName: tenant.Name,
 		tenantID:   tenant.ID,
 	}
