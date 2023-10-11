@@ -309,6 +309,61 @@ func (t *TenantCache) Load(tenantName string) (TenantRow, bool) {
 
 var insertScoreMutex sync.Mutex
 
+var playerScoreDetailCache PlayerScoreDetailCache
+
+type PlayerScoreDetailCache struct {
+	data       map[string][]PlayerScoreDetail
+	cachedTime map[string]time.Time
+	mutex      sync.RWMutex
+}
+
+func NewPlayerScoreDetailCache(initialMapSize int) *PlayerScoreDetailCache {
+	return &PlayerScoreDetailCache{
+		data: make(map[string][]PlayerScoreDetail, initialMapSize),
+	}
+}
+
+func (p *PlayerScoreDetailCache) Store(playerID string, psds []PlayerScoreDetail, now time.Time) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.data[playerID] = psds
+	p.cachedTime[playerID] = now
+}
+
+func (p *PlayerScoreDetailCache) Load(playerID string) ([]PlayerScoreDetail, time.Time, bool) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	psds, found := p.data[playerID]
+	beforeCachedTime, _ := p.cachedTime[playerID]
+	return psds, beforeCachedTime, found
+}
+
+var lastScorePostTimeCache LastScorePostTimeCache
+
+type LastScorePostTimeCache struct {
+	data  map[string]time.Time
+	mutex sync.RWMutex
+}
+
+func NewLastScorePostTimeCache(initialMapSize int) *LastScorePostTimeCache {
+	return &LastScorePostTimeCache{
+		data: make(map[string]time.Time, initialMapSize),
+	}
+}
+
+func (l *LastScorePostTimeCache) Store(playerID string, lastPostTime time.Time) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	l.data[playerID] = lastPostTime
+}
+
+func (l *LastScorePostTimeCache) Load(playerID string) (time.Time, bool) {
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+	lastPostTime, found := l.data[playerID]
+	return lastPostTime, found
+}
+
 // エラー処理関数
 func errorResponseHandler(err error, c echo.Context) {
 	c.Logger().Errorf("error at %s: %s", c.Path(), err.Error())
@@ -568,9 +623,9 @@ type PlayerScoreRow struct {
 }
 
 type PlayerIDScoreRowNum struct {
-	PlayerID    string `db:"player_id"`
-	Score       int64  `db:"score"`
-	RowNum      int64  `db:"row_num"`
+	PlayerID string `db:"player_id"`
+	Score    int64  `db:"score"`
+	RowNum   int64  `db:"row_num"`
 }
 
 type TenantsAddHandlerResult struct {
@@ -1233,6 +1288,8 @@ func competitionScoreHandler(c echo.Context) error {
 			return fmt.Errorf("error bulk insert player_scores: %w", err)
 		}
 		tx.Commit()
+		now := time.Now()
+		lastScorePostTimeCache.Store(competitionID, now)
 		return nil
 	}()
 	if err != nil {
@@ -1399,39 +1456,59 @@ func playerHandler(c echo.Context) error {
 	}
 	cs := value.([]CompetitionIDTitle)
 
+	canUseCache := true
+	beforePss, cachedTime, found := playerScoreDetailCache.Load(p.ID)
+	if !found {
+		canUseCache = false
+	}
 	compIDs := make([]string, 0, len(cs))
 	compIDTitleMap := map[string]string{}
 	for _, c := range cs {
+		if canUseCache {
+			if lastScorePostTime, found := lastScorePostTimeCache.Load(c.ID); found && cachedTime.Before(lastScorePostTime) {
+				canUseCache = false
+			}
+		}
 		compIDs = append(compIDs, c.ID)
 		compIDTitleMap[c.ID] = c.Title
 	}
 
-	pss := []PlayerScoreRowReduced{}
-	whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
-	query := fmt.Sprintf("SELECT player_id, competition_id, score FROM player_score WHERE tenant_id = ? AND competition_id IN (%s) AND player_id = ?", whereInPlaceholder)
-	args := make([]interface{}, 0, len(compIDs)+2)
-	args = append(args, v.tenantID)
-	for _, compID := range compIDs {
-		args = append(args, compID)
-	}
-	args = append(args, p.ID)
-	if err := scoreDB.SelectContext(
-		ctx,
-		&pss,
-		query,
-		args...,
-	); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("error Select player_scores: %w", err)
-		}
-	}
+	var scores []PlayerScoreDetail
 
-	psds := make([]PlayerScoreDetail, 0, len(pss))
-	for _, ps := range pss {
-		psds = append(psds, PlayerScoreDetail{
-			CompetitionTitle: compIDTitleMap[ps.CompetitionID],
-			Score:            ps.Score,
-		})
+	if canUseCache {
+		scores = beforePss
+	} else {
+		pss := []PlayerScoreRowReduced{}
+		whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
+		cachedTime := time.Now()
+		query := fmt.Sprintf("SELECT player_id, competition_id, score FROM player_score WHERE tenant_id = ? AND competition_id IN (%s) AND player_id = ?", whereInPlaceholder)
+		args := make([]interface{}, 0, len(compIDs)+2)
+		args = append(args, v.tenantID)
+		for _, compID := range compIDs {
+			args = append(args, compID)
+		}
+		args = append(args, p.ID)
+		if err := scoreDB.SelectContext(
+			ctx,
+			&pss,
+			query,
+			args...,
+		); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("error Select player_scores: %w", err)
+			}
+		}
+
+		psds := make([]PlayerScoreDetail, 0, len(pss))
+		for _, ps := range pss {
+			psds = append(psds, PlayerScoreDetail{
+				CompetitionTitle: compIDTitleMap[ps.CompetitionID],
+				Score:            ps.Score,
+			})
+		}
+
+		playerScoreDetailCache.Store(p.ID, psds, cachedTime)
+		scores = psds
 	}
 
 	res := SuccessResult{
@@ -1442,7 +1519,7 @@ func playerHandler(c echo.Context) error {
 				DisplayName:    p.DisplayName,
 				IsDisqualified: p.IsDisqualified,
 			},
-			Scores: psds,
+			Scores: scores,
 		},
 	}
 	return c.JSON(http.StatusOK, res)
