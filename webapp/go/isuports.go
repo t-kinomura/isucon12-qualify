@@ -1419,6 +1419,8 @@ type PlayerScoreRowReduced struct {
 	Score         int64  `db:"score"`
 }
 
+var playerHandlerCacheHitCount int
+
 // 参加者向けAPI
 // GET /api/player/player/:player_id
 // 参加者の詳細情報を取得する
@@ -1479,6 +1481,7 @@ func playerHandler(c echo.Context) error {
 	var scores []PlayerScoreDetail
 
 	if canUseCache {
+		playerHandlerCacheHitCount++
 		scores = beforePss
 	} else {
 		pss := []PlayerScoreRowReduced{}
@@ -1923,6 +1926,7 @@ func initializeHandler(c echo.Context) error {
 type DeveloperInfo struct {
 	LoadRankingCacheCallCount      int `json:"load_ranking_cache_call_count"`
 	LoadValidRankingCacheCallCount int `json:"load_valid_ranking_cache_call_count"`
+	PlayerHanderCacheHitCount      int `json:"player_hander_cache_hit_count"`
 }
 
 // 開発者向けAPI
@@ -1933,6 +1937,7 @@ func developerInfoHandler(c echo.Context) error {
 	res := DeveloperInfo{
 		LoadRankingCacheCallCount:      loadRankingCacheCallCount,
 		LoadValidRankingCacheCallCount: loadValidRankingCacheCallCount,
+		PlayerHanderCacheHitCount:      playerHandlerCacheHitCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
 }
