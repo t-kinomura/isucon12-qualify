@@ -29,6 +29,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/labstack/gommon/log"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -542,8 +543,8 @@ type CompetitionRow struct {
 }
 
 type CompetitionIDTitle struct {
-	ID           string        `db:"id"`
-	Title        string        `db:"title"`
+	ID    string `db:"id"`
+	Title string `db:"title"`
 }
 
 // 大会を取得する
@@ -1351,6 +1352,8 @@ func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]Competition
 	return cs, nil
 }
 
+var isuportsSG singleflight.Group
+
 // 参加者向けAPI
 // GET /api/player/player/:player_id
 // 参加者の詳細情報を取得する
@@ -1381,10 +1384,15 @@ func playerHandler(c echo.Context) error {
 		// 存在しないプレイヤー
 		return echo.NewHTTPError(http.StatusNotFound, "player not found")
 	}
-	cs, err := retrieveCompetitionRows(ctx, v.tenantID)
+
+	key := fmt.Sprintf("tenant_id:%d", v.tenantID)
+	value, err, _ := isuportsSG.Do(key, func() (interface{}, error) {
+		return retrieveCompetitionRows(ctx, v.tenantID)
+	})
 	if err != nil {
 		return err
 	}
+	cs := value.([]CompetitionIDTitle)
 
 	compIDs := make([]string, 0, len(cs))
 	compIDTitleMap := map[string]string{}
