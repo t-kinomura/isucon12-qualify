@@ -1354,6 +1354,12 @@ func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]Competition
 
 var isuportsSG singleflight.Group
 
+type PlayerScoreRowReduced struct {
+	PlayerID      string `db:"player_id"`
+	CompetitionID string `db:"competition_id"`
+	Score         int64  `db:"score"`
+}
+
 // 参加者向けAPI
 // GET /api/player/player/:player_id
 // 参加者の詳細情報を取得する
@@ -1401,9 +1407,9 @@ func playerHandler(c echo.Context) error {
 		compIDTitleMap[c.ID] = c.Title
 	}
 
-	pss := []PlayerScoreRow{}
+	pss := []PlayerScoreRowReduced{}
 	whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
-	query := fmt.Sprintf("SELECT * FROM player_score WHERE tenant_id = ? AND competition_id IN (%s) AND player_id = ?", whereInPlaceholder)
+	query := fmt.Sprintf("SELECT player_id, competition_id, score FROM player_score WHERE tenant_id = ? AND competition_id IN (%s) AND player_id = ?", whereInPlaceholder)
 	args := make([]interface{}, 0, len(compIDs)+2)
 	args = append(args, v.tenantID)
 	for _, compID := range compIDs {
