@@ -1354,6 +1354,17 @@ func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]Competition
 
 var isuportsSG singleflight.Group
 
+type PlayerScoreRowReduced struct {
+	PlayerID      string `db:"player_id"`
+	CompetitionID string `db:"competition_id"`
+	Score         int64  `db:"score"`
+}
+
+type singleflightReturn struct {
+	pss []PlayerScoreRowReduced
+	compIDTitleMap map[string]string
+}
+
 // 参加者向けAPI
 // GET /api/player/player/:player_id
 // 参加者の詳細情報を取得する
@@ -1387,42 +1398,53 @@ func playerHandler(c echo.Context) error {
 
 	key := fmt.Sprintf("tenant_id:%d", v.tenantID)
 	value, err, _ := isuportsSG.Do(key, func() (interface{}, error) {
-		return retrieveCompetitionRows(ctx, v.tenantID)
+		cs, err := retrieveCompetitionRows(ctx, v.tenantID)
+		if err != nil {
+			return nil, err
+		}
+		compIDs := make([]string, 0, len(cs))
+		compIDTitleMap := map[string]string{}
+		for _, c := range cs {
+			compIDs = append(compIDs, c.ID)
+			compIDTitleMap[c.ID] = c.Title
+		}
+
+		pss := []PlayerScoreRowReduced{}
+		whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
+		query := fmt.Sprintf("SELECT player_id, score, competition_id FROM player_score WHERE tenant_id = ? AND competition_id IN (%s)", whereInPlaceholder)
+		args := make([]interface{}, 0, len(compIDs)+1)
+		args = append(args, v.tenantID)
+		for _, compID := range compIDs {
+			args = append(args, compID)
+		}
+		if err := scoreDB.SelectContext(
+			ctx,
+			&pss,
+			query,
+			args...,
+		); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("error Select player_scores: %w", err)
+			}
+		}
+		return singleflightReturn{
+			pss: pss,
+			compIDTitleMap: compIDTitleMap,
+		}, nil
 	})
 	if err != nil {
 		return err
 	}
-	cs := value.([]CompetitionIDTitle)
 
-	compIDs := make([]string, 0, len(cs))
-	compIDTitleMap := map[string]string{}
-	for _, c := range cs {
-		compIDs = append(compIDs, c.ID)
-		compIDTitleMap[c.ID] = c.Title
-	}
-
-	pss := []PlayerScoreRow{}
-	whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
-	query := fmt.Sprintf("SELECT * FROM player_score WHERE tenant_id = ? AND competition_id IN (%s) AND player_id = ?", whereInPlaceholder)
-	args := make([]interface{}, 0, len(compIDs)+2)
-	args = append(args, v.tenantID)
-	for _, compID := range compIDs {
-		args = append(args, compID)
-	}
-	args = append(args, p.ID)
-	if err := scoreDB.SelectContext(
-		ctx,
-		&pss,
-		query,
-		args...,
-	); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("error Select player_scores: %w", err)
-		}
-	}
+	singleflightReturn := value.(singleflightReturn)
+	pss := singleflightReturn.pss
+	compIDTitleMap := singleflightReturn.compIDTitleMap
 
 	psds := make([]PlayerScoreDetail, 0, len(pss))
 	for _, ps := range pss {
+		if p.ID != ps.PlayerID {
+			continue
+		}
 		psds = append(psds, PlayerScoreDetail{
 			CompetitionTitle: compIDTitleMap[ps.CompetitionID],
 			Score:            ps.Score,
