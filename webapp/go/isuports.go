@@ -1468,6 +1468,7 @@ func playerHandler(c echo.Context) error {
 	canUseCache := true
 	beforePsMap, cachedTime, found := playerScoreDetailCache.Load(p.ID)
 	if !found {
+		beforePsMap = make(map[string]PlayerScoreDetail, len(cs))
 		canUseCache = false
 	}
 	compIDs := make([]string, 0, len(cs))
