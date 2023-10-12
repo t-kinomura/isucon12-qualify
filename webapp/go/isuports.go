@@ -1875,7 +1875,7 @@ func initializeHandler(c echo.Context) error {
 	); err != nil {
 		return fmt.Errorf("error Select player: %w", err)
 	}
-	go func() {
+	func() {
 		cs := []CompetitionRow{}
 		if err := adminDB.SelectContext(
 			ctx,
@@ -1886,50 +1886,80 @@ func initializeHandler(c echo.Context) error {
 			return
 		}
 
+		var chunkedCompIDs [][]string
+
+		chunkSize := 100
+
+		compIDs := make([]string, 0, len(cs))
 		for _, comp := range cs {
-			pss := []PlayerScoreRow{}
+			compIDs = append(compIDs, comp.ID)
+		}
+		for i := 0; i < len(compIDs); i += chunkSize {
+			end := i + chunkSize
+
+			if end > len(cs) {
+				end = len(cs)
+			}
+
+			chunkedCompIDs = append(chunkedCompIDs, compIDs[i:end])
+		}
+
+		for _, compIDs := range chunkedCompIDs {
+			whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
+			query := fmt.Sprintf("SELECT * FROM player_score WHERE competition_id IN (%s)", whereInPlaceholder)
+			// pssにはいろんなcompetitionのplayer_scoreが入っている
+			pss := make([]PlayerScoreRow, 0, len(compIDs) * 100)
 			if err := scoreDB.SelectContext(
 				ctx,
 				&pss,
-				"SELECT * FROM player_score WHERE competition_id  = ?",
-				comp.ID,
+				query,
+				compIDs,
 			); err != nil {
 				if !errors.Is(err, sql.ErrNoRows) {
 					c.Logger().Errorf("error Select player_scores: %w", err)
 					return
 				}
 			}
-
-			go func(pss []PlayerScoreRow, comp CompetitionRow) {
-				ranks := make([]CompetitionRank, 0, len(pss))
-				for _, ps := range pss {
-					player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
-					ranks = append(ranks, CompetitionRank{
-						Score:             ps.Score,
-						PlayerID:          ps.PlayerID,
-						PlayerDisplayName: player.DisplayName,
-						RowNum:            ps.RowNum,
-					})
+			// competitionごとにplayer_scoreを分ける
+			compIDToPlayerScoreRows := make(map[string][]PlayerScoreRow, len(compIDs))
+			for _, ps := range pss {
+				if _, found := compIDToPlayerScoreRows[ps.CompetitionID]; !found {
+					compIDToPlayerScoreRows[ps.CompetitionID] = make([]PlayerScoreRow, 0, 100)
 				}
-				sort.Slice(ranks, func(i, j int) bool {
-					if ranks[i].Score == ranks[j].Score {
-						return ranks[i].RowNum < ranks[j].RowNum
+				compIDToPlayerScoreRows[ps.CompetitionID] = append(compIDToPlayerScoreRows[ps.CompetitionID], ps)
+			}
+			for compID, pss := range compIDToPlayerScoreRows {
+				func(pss []PlayerScoreRow, comp string) {
+					ranks := make([]CompetitionRank, 0, len(pss))
+					for _, ps := range pss {
+						player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
+						ranks = append(ranks, CompetitionRank{
+							Score:             ps.Score,
+							PlayerID:          ps.PlayerID,
+							PlayerDisplayName: player.DisplayName,
+							RowNum:            ps.RowNum,
+						})
 					}
-					return ranks[i].Score > ranks[j].Score
-				})
-				pagedRanks := make([]CompetitionRank, 0, len(pss))
-				for i, rank := range ranks {
-					pagedRanks = append(pagedRanks, CompetitionRank{
-						Rank:              int64(i + 1),
-						Score:             rank.Score,
-						PlayerID:          rank.PlayerID,
-						PlayerDisplayName: rank.PlayerDisplayName,
+					sort.Slice(ranks, func(i, j int) bool {
+						if ranks[i].Score == ranks[j].Score {
+							return ranks[i].RowNum < ranks[j].RowNum
+						}
+						return ranks[i].Score > ranks[j].Score
 					})
-				}
+					pagedRanks := make([]CompetitionRank, 0, len(pss))
+					for i, rank := range ranks {
+						pagedRanks = append(pagedRanks, CompetitionRank{
+							Rank:              int64(i + 1),
+							Score:             rank.Score,
+							PlayerID:          rank.PlayerID,
+							PlayerDisplayName: rank.PlayerDisplayName,
+						})
+					}
 
-				rankingCache.StoreDBUpdateTime(comp.ID, time.Now().Add(-time.Second)) // store cacheするときより前ならなんでもいい
-				rankingCache.StoreRankingCache(comp.ID, pagedRanks, time.Now())
-			}(pss, comp)
+					rankingCache.StoreDBUpdateTime(compID, time.Now().Add(-time.Second)) // store cacheするときより前ならなんでもいい
+					rankingCache.StoreRankingCache(compID, pagedRanks, time.Now())
+				}(pss, compID)
+			}
 		}
 	}()
 	for _, p := range pls {
@@ -1960,10 +1990,10 @@ type DeveloperInfo struct {
 // 知りたいデータを返す
 func developerInfoHandler(c echo.Context) error {
 	res := DeveloperInfo{
-		LoadRankingCacheCallCount:      loadRankingCacheCallCount,
-		LoadValidRankingCacheCallCount: loadValidRankingCacheCallCount,
-		PlayerHanderCacheHitCount:      playerHandlerCacheHitCount,
-		PlayerHanderCacheMissCount:     playerHandlerCacheMissCount,
+		LoadRankingCacheCallCount:            loadRankingCacheCallCount,
+		LoadValidRankingCacheCallCount:       loadValidRankingCacheCallCount,
+		PlayerHanderCacheHitCount:            playerHandlerCacheHitCount,
+		PlayerHanderCacheMissCount:           playerHandlerCacheMissCount,
 		MissingCompetitionInBeforeCacheCount: missingCompetitionInBeforeCacheCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
