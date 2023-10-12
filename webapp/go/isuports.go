@@ -1286,9 +1286,11 @@ func competitionScoreHandler(c echo.Context) error {
 			tx.Rollback()
 			return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
 		}
-		if _, err := tx.Exec(stmt, valueArgs...); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error bulk insert player_scores: %w", err)
+		if CSVRows != 0 {
+			if _, err := tx.Exec(stmt, valueArgs...); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("error bulk insert player_scores: %w", err)
+			}
 		}
 		tx.Commit()
 		now := time.Now()
@@ -1908,7 +1910,7 @@ func initializeHandler(c echo.Context) error {
 			whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
 			query := fmt.Sprintf("SELECT * FROM player_score WHERE competition_id IN (%s)", whereInPlaceholder)
 			// pssにはいろんなcompetitionのplayer_scoreが入っている
-			pss := make([]PlayerScoreRow, 0, len(compIDs) * 100)
+			pss := make([]PlayerScoreRow, 0, len(compIDs)*100)
 			if err := scoreDB.SelectContext(
 				ctx,
 				&pss,
