@@ -314,31 +314,31 @@ var insertScoreMutex sync.Mutex
 var playerScoreDetailCache PlayerScoreDetailCache
 
 type PlayerScoreDetailCache struct {
-	data       map[string][]PlayerScoreDetail
+	data       map[string]map[string]PlayerScoreDetail
 	cachedTime map[string]time.Time
 	mutex      sync.RWMutex
 }
 
 func NewPlayerScoreDetailCache(initialMapSize int) *PlayerScoreDetailCache {
 	return &PlayerScoreDetailCache{
-		data: make(map[string][]PlayerScoreDetail, initialMapSize),
+		data:       make(map[string]map[string]PlayerScoreDetail, initialMapSize),
 		cachedTime: make(map[string]time.Time, initialMapSize),
 	}
 }
 
-func (p *PlayerScoreDetailCache) Store(playerID string, psds []PlayerScoreDetail, now time.Time) {
+func (p *PlayerScoreDetailCache) Store(playerID string, psMap map[string]PlayerScoreDetail, now time.Time) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	p.data[playerID] = psds
+	p.data[playerID] = psMap
 	p.cachedTime[playerID] = now
 }
 
-func (p *PlayerScoreDetailCache) Load(playerID string) ([]PlayerScoreDetail, time.Time, bool) {
+func (p *PlayerScoreDetailCache) Load(playerID string) (map[string]PlayerScoreDetail, time.Time, bool) {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
-	psds, found := p.data[playerID]
+	psMap, found := p.data[playerID]
 	beforeCachedTime, _ := p.cachedTime[playerID]
-	return psds, beforeCachedTime, found
+	return psMap, beforeCachedTime, found
 }
 
 var lastScorePostTimeCache LastScorePostTimeCache
@@ -1419,8 +1419,11 @@ type PlayerScoreRowReduced struct {
 	Score         int64  `db:"score"`
 }
 
-var playerHandlerCacheHitCount int
-var playerHandlerCacheMissCount int
+var (
+	playerHandlerCacheHitCount           int
+	playerHandlerCacheMissCount          int
+	missingCompetitionInBeforeCacheCount int
+)
 
 // 参加者向けAPI
 // GET /api/player/player/:player_id
@@ -1463,29 +1466,43 @@ func playerHandler(c echo.Context) error {
 	cs := value.([]CompetitionIDTitle)
 
 	canUseCache := true
-	beforePss, cachedTime, found := playerScoreDetailCache.Load(p.ID)
+	beforePsMap, cachedTime, found := playerScoreDetailCache.Load(p.ID)
 	if !found {
 		canUseCache = false
 	}
 	compIDs := make([]string, 0, len(cs))
 	compIDTitleMap := map[string]string{}
-	for _, c := range cs {
-		if canUseCache {
+	toRespSlice := make([]PlayerScoreDetail, 0, len(cs))
+	if canUseCache {
+		for _, c := range cs {
 			if lastScorePostTime, found := lastScorePostTimeCache.Load(c.ID); found && cachedTime.Before(lastScorePostTime) {
-				canUseCache = false
+				// その大会のスコアが更新されているのでキャッシュを使えない
+				compIDs = append(compIDs, c.ID)
+				compIDTitleMap[c.ID] = c.Title
+			} else {
+				// その大会のスコアが更新されていないのでキャッシュを使える
+				psd, found := beforePsMap[c.ID]
+				if !found {
+					// その大会のスコアは更新されていないが、キャッシュにデータが存在しない -> その大会のスコアが存在しない
+					missingCompetitionInBeforeCacheCount++
+					continue
+				}
+				// レスポンス用
+				toRespSlice = append(toRespSlice, psd)
 			}
 		}
-		compIDs = append(compIDs, c.ID)
-		compIDTitleMap[c.ID] = c.Title
+	} else {
+		for _, c := range cs {
+			compIDs = append(compIDs, c.ID)
+			compIDTitleMap[c.ID] = c.Title
+		}
 	}
 
 	var scores []PlayerScoreDetail
 
-	if canUseCache {
-		playerHandlerCacheHitCount++
-		scores = beforePss
+	if len(compIDs) == 0 {
+		scores = toRespSlice
 	} else {
-		playerHandlerCacheMissCount++
 		pss := []PlayerScoreRowReduced{}
 		whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
 		cachedTime := time.Now()
@@ -1509,14 +1526,17 @@ func playerHandler(c echo.Context) error {
 
 		psds := make([]PlayerScoreDetail, 0, len(pss))
 		for _, ps := range pss {
-			psds = append(psds, PlayerScoreDetail{
+			psd := PlayerScoreDetail{
 				CompetitionTitle: compIDTitleMap[ps.CompetitionID],
 				Score:            ps.Score,
-			})
+			}
+			psds = append(psds, psd)
+
+			beforePsMap[ps.CompetitionID] = psd
 		}
 
-		playerScoreDetailCache.Store(p.ID, psds, cachedTime)
-		scores = psds
+		playerScoreDetailCache.Store(p.ID, beforePsMap, cachedTime)
+		scores = append(toRespSlice, psds...)
 	}
 
 	res := SuccessResult{
@@ -1926,10 +1946,11 @@ func initializeHandler(c echo.Context) error {
 }
 
 type DeveloperInfo struct {
-	LoadRankingCacheCallCount      int `json:"load_ranking_cache_call_count"`
-	LoadValidRankingCacheCallCount int `json:"load_valid_ranking_cache_call_count"`
-	PlayerHanderCacheHitCount      int `json:"player_hander_cache_hit_count"`
-	PlayerHanderCacheMissCount      int `json:"player_hander_cache_miss_count"`
+	LoadRankingCacheCallCount            int `json:"load_ranking_cache_call_count"`
+	LoadValidRankingCacheCallCount       int `json:"load_valid_ranking_cache_call_count"`
+	PlayerHanderCacheHitCount            int `json:"player_hander_cache_hit_count"`
+	PlayerHanderCacheMissCount           int `json:"player_hander_cache_miss_count"`
+	MissingCompetitionInBeforeCacheCount int `json:"missing_competition_in_before_cache_count"`
 }
 
 // 開発者向けAPI
@@ -1941,7 +1962,8 @@ func developerInfoHandler(c echo.Context) error {
 		LoadRankingCacheCallCount:      loadRankingCacheCallCount,
 		LoadValidRankingCacheCallCount: loadValidRankingCacheCallCount,
 		PlayerHanderCacheHitCount:      playerHandlerCacheHitCount,
-		PlayerHanderCacheMissCount:      playerHandlerCacheMissCount,
+		PlayerHanderCacheMissCount:     playerHandlerCacheMissCount,
+		MissingCompetitionInBeforeCacheCount: missingCompetitionInBeforeCacheCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
 }
