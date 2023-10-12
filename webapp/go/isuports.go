@@ -1420,6 +1420,7 @@ type PlayerScoreRowReduced struct {
 }
 
 var playerHandlerCacheHitCount int
+var playerHandlerCacheMissCount int
 
 // 参加者向けAPI
 // GET /api/player/player/:player_id
@@ -1484,6 +1485,7 @@ func playerHandler(c echo.Context) error {
 		playerHandlerCacheHitCount++
 		scores = beforePss
 	} else {
+		playerHandlerCacheMissCount++
 		pss := []PlayerScoreRowReduced{}
 		whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
 		cachedTime := time.Now()
@@ -1927,6 +1929,7 @@ type DeveloperInfo struct {
 	LoadRankingCacheCallCount      int `json:"load_ranking_cache_call_count"`
 	LoadValidRankingCacheCallCount int `json:"load_valid_ranking_cache_call_count"`
 	PlayerHanderCacheHitCount      int `json:"player_hander_cache_hit_count"`
+	PlayerHanderCacheMissCount      int `json:"player_hander_cache_miss_count"`
 }
 
 // 開発者向けAPI
@@ -1938,6 +1941,7 @@ func developerInfoHandler(c echo.Context) error {
 		LoadRankingCacheCallCount:      loadRankingCacheCallCount,
 		LoadValidRankingCacheCallCount: loadValidRankingCacheCallCount,
 		PlayerHanderCacheHitCount:      playerHandlerCacheHitCount,
+		PlayerHanderCacheMissCount:      playerHandlerCacheMissCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
 }
