@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -103,6 +104,8 @@ func MyLogErrorFunc(c echo.Context, err error, stack []byte) error {
 	return nil
 }
 
+var httpClient http.Client
+
 // Run は cmd/isuports/main.go から呼ばれるエントリーポイントです
 func Run() {
 	e := echo.New()
@@ -147,9 +150,10 @@ func Run() {
 	// 全ロール及び未認証でも使えるhandler
 	e.GET("/api/me", meHandler)
 
+	e.POST("/token/validate", parseTokenHandler)
+
 	// ベンチマーカー向けAPI
 	e.POST("/initialize", initializeHandler)
-	e.POST("/initialize-for-second-server", initializeHandlerForSecondServer)
 
 	// 開発者向けAPI
 	e.GET("/info", developerInfoHandler)
@@ -184,6 +188,9 @@ func Run() {
 	tenantCache = *NewTenantCache(200)
 	playerScoreDetailCache = *NewPlayerScoreDetailCache(50000)
 	lastScorePostTimeCache = *NewLastScorePostTimeCache(2500)
+
+	validateEndpoint = fmt.Sprintf("http://%s:3000/token/validate", getEnv("ISUCON_APP_SERVER2_HOST", "localhost"))
+	httpClient = http.Client{Timeout: 10 * time.Second}
 
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
@@ -437,6 +444,68 @@ type IsuportsClaim struct {
 	Role string `json:"role"`
 }
 
+func parseTokenHandler(c echo.Context) error {
+	tokenStr := c.FormValue("token")
+	var isuportsClaim IsuportsClaim
+	err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+	if err != nil {
+		return echo.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("invalid token"),
+		)
+	}
+
+	return c.JSON(http.StatusOK, isuportsClaim)
+}
+
+var validateEndpoint string
+
+type TokenBody struct {
+	Token string `json:"token"`
+}
+
+func parseToken(tokenStr string) (*IsuportsClaim, error) {
+	// 半分だけ別のサーバーで受け持つ
+	thisServer := make(chan struct{}, 1)
+	anotherServer := make(chan struct{}, 1)
+
+	thisServer <- struct{}{}
+	anotherServer <- struct{}{}
+
+	var isuportsClaim IsuportsClaim
+	select {
+	case <-thisServer:
+		req, err := http.NewRequest("POST", validateEndpoint, strings.NewReader(fmt.Sprintf(`{"token": "%s"}`, tokenStr)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		res, err := httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("invalid token")
+		}
+		resBody, err := io.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+		err = json.Unmarshal(resBody, &isuportsClaim)
+		if err != nil {
+			return nil, err
+		}
+	case <-anotherServer:
+		err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &isuportsClaim, nil
+}
+
 // リクエストヘッダをパースしてViewerを返す
 func parseViewer(c echo.Context) (*Viewer, error) {
 	cookie, err := c.Request().Cookie(cookieName)
@@ -447,8 +516,7 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 		)
 	}
 	tokenStr := cookie.Value
-	var isuportsClaim IsuportsClaim
-	err = jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+	isuportsClaim, err := parseToken(tokenStr)
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("error jwt.Parse: %s", err.Error()))
 	}
@@ -1978,48 +2046,10 @@ func initializeHandler(c echo.Context) error {
 		}
 	}()
 
-	err = initializeSecondServer()
-	if err != nil {
-		return fmt.Errorf("error initialize second server: %w", err)
-	}
-
 	res := InitializeHandlerResult{
 		Lang: "go",
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
-}
-
-func initializeSecondServer() error {
-	secondServerUrl := "http://" + getEnv("ISUCON_APP_SERVER2_HOST", "") + ":3000" + "/initialize-for-second-server"
-	resp, err := http.Post(secondServerUrl, "application/json", nil)
-	if err != nil {
-		return fmt.Errorf("error http.Post: %w", err)
-	}
-	defer resp.Body.Close()
-	return nil
-}
-
-func initializeHandlerForSecondServer(c echo.Context) error {
-	ctx := context.Background()
-
-	// playerCacheに初期データを保存する
-	var pls []PlayerRow
-	if err := scoreDB.SelectContext(
-		ctx,
-		&pls,
-		"SELECT * FROM player",
-	); err != nil {
-		return fmt.Errorf("error Select player: %w", err)
-	}
-	for _, p := range pls {
-		playerCache.StorePlayerCache(PlayerDetail{
-			ID:             p.ID,
-			DisplayName:    p.DisplayName,
-			IsDisqualified: p.IsDisqualified,
-		})
-	}
-
-	return c.JSON(http.StatusOK, nil)
 }
 
 type DeveloperInfo struct {
