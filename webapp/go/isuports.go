@@ -449,6 +449,7 @@ func parseTokenHandler(c echo.Context) error {
 	var isuportsClaim IsuportsClaim
 	err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
 	if err != nil {
+		c.Logger().Errorf("error jwt.ParseClaims: %s", err.Error())
 		return echo.NewHTTPError(
 			http.StatusBadRequest,
 			fmt.Sprintf("invalid token"),
@@ -486,7 +487,7 @@ func parseToken(tokenStr string) (*IsuportsClaim, error) {
 		}
 		defer res.Body.Close()
 		if res.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("invalid token")
+			return nil, fmt.Errorf("invalid token: status: %d", res.StatusCode)
 		}
 		resBody, err := io.ReadAll(res.Body)
 		if err != nil {
