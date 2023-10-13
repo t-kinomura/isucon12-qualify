@@ -475,14 +475,26 @@ type TokenBody struct {
 func parseToken(tokenStr string) (*IsuportsClaim, error) {
 	// 半分だけ別のサーバーで受け持つ
 	thisServer := make(chan struct{}, 1)
+	thisServer2 := make(chan struct{}, 1)
 	anotherServer := make(chan struct{}, 1)
 
 	thisServer <- struct{}{}
+	thisServer2 <- struct{}{}
 	anotherServer <- struct{}{}
 
 	var isuportsClaim IsuportsClaim
 	select {
 	case <-thisServer:
+		err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+		if err != nil {
+			return nil, err
+		}
+	case <-thisServer2:
+		err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+		if err != nil {
+			return nil, err
+		}
+	case <-anotherServer:
 		tokenBody := TokenBody{Value: tokenStr}
 		marshalled, err := json.Marshal(tokenBody)
 		req, err := http.NewRequest("POST", validateEndpoint, strings.NewReader(string(marshalled)))
@@ -503,11 +515,6 @@ func parseToken(tokenStr string) (*IsuportsClaim, error) {
 			return nil, err
 		}
 		err = json.Unmarshal(resBody, &isuportsClaim)
-		if err != nil {
-			return nil, err
-		}
-	case <-anotherServer:
-		err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
 		if err != nil {
 			return nil, err
 		}
