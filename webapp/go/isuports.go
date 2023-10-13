@@ -149,6 +149,7 @@ func Run() {
 
 	// ベンチマーカー向けAPI
 	e.POST("/initialize", initializeHandler)
+	e.POST("/initialize-for-second-server", initializeHandlerForSecondServer)
 
 	// 開発者向けAPI
 	e.GET("/info", developerInfoHandler)
@@ -1868,7 +1869,6 @@ func initializeHandler(c echo.Context) error {
 	ctx := context.Background()
 
 	// playerCacheに初期データを保存する
-	// initializeで終わらせたいので同期的に処理する
 	var pls []PlayerRow
 	if err := scoreDB.SelectContext(
 		ctx,
@@ -1877,6 +1877,15 @@ func initializeHandler(c echo.Context) error {
 	); err != nil {
 		return fmt.Errorf("error Select player: %w", err)
 	}
+	for _, p := range pls {
+		playerCache.StorePlayerCache(PlayerDetail{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			IsDisqualified: p.IsDisqualified,
+		})
+	}
+
+	// rankingCacheに初期データを保存する
 	func() {
 		cs := []CompetitionRow{}
 		if err := adminDB.SelectContext(
@@ -1964,6 +1973,40 @@ func initializeHandler(c echo.Context) error {
 			}
 		}
 	}()
+
+	err = initializeSecondServer()
+	if err != nil {
+		return fmt.Errorf("error initialize second server: %w", err)
+	}
+
+	res := InitializeHandlerResult{
+		Lang: "go",
+	}
+	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
+}
+
+func initializeSecondServer() error {
+	secondServerUrl := getEnv("ISUCON_APP_SERVER2_HOST", "") + ":3000" + "/initialize-for-second-server"
+	resp, err := http.Post(secondServerUrl, "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("error http.Post: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func initializeHandlerForSecondServer(c echo.Context) error {
+	ctx := context.Background()
+
+	// playerCacheに初期データを保存する
+	var pls []PlayerRow
+	if err := scoreDB.SelectContext(
+		ctx,
+		&pls,
+		"SELECT * FROM player",
+	); err != nil {
+		return fmt.Errorf("error Select player: %w", err)
+	}
 	for _, p := range pls {
 		playerCache.StorePlayerCache(PlayerDetail{
 			ID:             p.ID,
@@ -1972,10 +2015,7 @@ func initializeHandler(c echo.Context) error {
 		})
 	}
 
-	res := InitializeHandlerResult{
-		Lang: "go",
-	}
-	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
+	return c.JSON(http.StatusOK, nil)
 }
 
 type DeveloperInfo struct {
