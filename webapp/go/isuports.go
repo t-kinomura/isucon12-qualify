@@ -1918,13 +1918,17 @@ func initializeHandler(c echo.Context) error {
 		for _, compIDs := range chunkedCompIDs {
 			whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
 			query := fmt.Sprintf("SELECT * FROM player_score WHERE competition_id IN (%s)", whereInPlaceholder)
+			args := make([]interface{}, 0, len(compIDs))
+			for _, compID := range compIDs {
+				args = append(args, compID)
+			}
 			// pssにはいろんなcompetitionのplayer_scoreが入っている
 			pss := make([]PlayerScoreRow, 0, len(compIDs)*100)
 			if err := scoreDB.SelectContext(
 				ctx,
 				&pss,
 				query,
-				compIDs,
+				args...,
 			); err != nil {
 				if !errors.Is(err, sql.ErrNoRows) {
 					c.Logger().Errorf("error Select player_scores: %w", err)
@@ -1986,7 +1990,7 @@ func initializeHandler(c echo.Context) error {
 }
 
 func initializeSecondServer() error {
-	secondServerUrl := getEnv("ISUCON_APP_SERVER2_HOST", "") + ":3000" + "/initialize-for-second-server"
+	secondServerUrl := "http://" + getEnv("ISUCON_APP_SERVER2_HOST", "") + ":3000" + "/initialize-for-second-server"
 	resp, err := http.Post(secondServerUrl, "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("error http.Post: %w", err)
