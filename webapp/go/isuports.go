@@ -445,11 +445,18 @@ type IsuportsClaim struct {
 }
 
 func parseTokenHandler(c echo.Context) error {
-	tokenStr := c.FormValue("token")
+	var tokenBody TokenBody
+	err := c.Bind(&tokenBody); if err != nil {
+		c.Logger().Errorf("bad request, error: %s", err.Error())
+		return echo.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("bad request"),
+		)
+	}
 	var isuportsClaim IsuportsClaim
-	err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+	err = jwt.ParseClaims([]byte(tokenBody.Value), isuoprtsVerifier, &isuportsClaim)
 	if err != nil {
-		c.Logger().Errorf("error jwt.ParseClaims. err: %s, token: %s", err.Error(), tokenStr)
+		c.Logger().Errorf("error jwt.ParseClaims. err: %s, token: %s", err.Error(), tokenBody.Value)
 		return echo.NewHTTPError(
 			http.StatusBadRequest,
 			fmt.Sprintf("invalid token"),
@@ -462,7 +469,7 @@ func parseTokenHandler(c echo.Context) error {
 var validateEndpoint string
 
 type TokenBody struct {
-	Token string `json:"token"`
+	Value string `json:"value"`
 }
 
 func parseToken(tokenStr string) (*IsuportsClaim, error) {
@@ -476,7 +483,9 @@ func parseToken(tokenStr string) (*IsuportsClaim, error) {
 	var isuportsClaim IsuportsClaim
 	select {
 	case <-thisServer:
-		req, err := http.NewRequest("POST", validateEndpoint, strings.NewReader(fmt.Sprintf(`{"token": %s}`, tokenStr)))
+		tokenBody := TokenBody{Value: tokenStr}
+		marshalled, err := json.Marshal(tokenBody)
+		req, err := http.NewRequest("POST", validateEndpoint, strings.NewReader(string(marshalled)))
 		if err != nil {
 			return nil, err
 		}
