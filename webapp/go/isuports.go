@@ -2,8 +2,12 @@ package isuports
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -19,15 +23,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cristalhq/jwt/v5"
 	"github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/labstack/gommon/log"
-	"github.com/lestrrat-go/jwx/v2/jwa"
-	"github.com/lestrrat-go/jwx/v2/jwk"
-	"github.com/lestrrat-go/jwx/v2/jwt"
-	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -101,6 +104,8 @@ func MyLogErrorFunc(c echo.Context, err error, stack []byte) error {
 	return nil
 }
 
+var httpClient http.Client
+
 // Run は cmd/isuports/main.go から呼ばれるエントリーポイントです
 func Run() {
 	e := echo.New()
@@ -145,6 +150,8 @@ func Run() {
 	// 全ロール及び未認証でも使えるhandler
 	e.GET("/api/me", meHandler)
 
+	e.POST("/token/validate", parseTokenHandler)
+
 	// ベンチマーカー向けAPI
 	e.POST("/initialize", initializeHandler)
 
@@ -169,10 +176,21 @@ func Run() {
 	scoreDB.SetMaxOpenConns(50)
 	defer scoreDB.Close()
 
+	isuoprtsVerifier, err = GetIsuportsVerifier()
+	if err != nil {
+		e.Logger.Fatalf("failed to create jwt verifier: %v", err)
+		return
+	}
+
 	// initialize cache
 	rankingCache = *NewRankingCache(3000)
 	playerCache = *NewPlayerCache(50000)
 	tenantCache = *NewTenantCache(200)
+	playerScoreDetailCache = *NewPlayerScoreDetailCache(50000)
+	lastScorePostTimeCache = *NewLastScorePostTimeCache(2500)
+
+	validateEndpoint = fmt.Sprintf("http://%s:3000/token/validate", getEnv("ISUCON_APP_SERVER2_HOST", "localhost"))
+	httpClient = http.Client{Timeout: 10 * time.Second}
 
 	port := getEnv("SERVER_APP_PORT", "3000")
 	e.Logger.Infof("starting isuports server on : %s ...", port)
@@ -301,6 +319,62 @@ func (t *TenantCache) Load(tenantName string) (TenantRow, bool) {
 
 var insertScoreMutex sync.Mutex
 
+var playerScoreDetailCache PlayerScoreDetailCache
+
+type PlayerScoreDetailCache struct {
+	data       map[string]map[string]PlayerScoreDetail
+	cachedTime map[string]time.Time
+	mutex      sync.RWMutex
+}
+
+func NewPlayerScoreDetailCache(initialMapSize int) *PlayerScoreDetailCache {
+	return &PlayerScoreDetailCache{
+		data:       make(map[string]map[string]PlayerScoreDetail, initialMapSize),
+		cachedTime: make(map[string]time.Time, initialMapSize),
+	}
+}
+
+func (p *PlayerScoreDetailCache) Store(playerID string, psMap map[string]PlayerScoreDetail, now time.Time) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.data[playerID] = psMap
+	p.cachedTime[playerID] = now
+}
+
+func (p *PlayerScoreDetailCache) Load(playerID string) (map[string]PlayerScoreDetail, time.Time, bool) {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	psMap, found := p.data[playerID]
+	beforeCachedTime, _ := p.cachedTime[playerID]
+	return psMap, beforeCachedTime, found
+}
+
+var lastScorePostTimeCache LastScorePostTimeCache
+
+type LastScorePostTimeCache struct {
+	data  map[string]time.Time
+	mutex sync.RWMutex
+}
+
+func NewLastScorePostTimeCache(initialMapSize int) *LastScorePostTimeCache {
+	return &LastScorePostTimeCache{
+		data: make(map[string]time.Time, initialMapSize),
+	}
+}
+
+func (l *LastScorePostTimeCache) Store(playerID string, lastPostTime time.Time) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	l.data[playerID] = lastPostTime
+}
+
+func (l *LastScorePostTimeCache) Load(playerID string) (time.Time, bool) {
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+	lastPostTime, found := l.data[playerID]
+	return lastPostTime, found
+}
+
 // エラー処理関数
 func errorResponseHandler(err error, c echo.Context) {
 	c.Logger().Errorf("error at %s: %s", c.Path(), err.Error())
@@ -334,6 +408,122 @@ type Viewer struct {
 	tenantID   int64
 }
 
+var isuoprtsVerifier *jwt.RSAlg
+
+func GetIsuportsVerifier() (*jwt.RSAlg, error) {
+	keyFilename := getEnv("ISUCON_JWT_KEY_FILE", "../public.pem")
+	pemBytes, err := os.ReadFile(keyFilename)
+	if err != nil {
+		return nil, fmt.Errorf("error os.ReadFile: keyFilename=%s: %w", keyFilename, err)
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return nil, errors.New("failed to decode PEM block containing public key")
+	}
+
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("not an RSA public key")
+	}
+
+	key := rsa.PublicKey{
+		N: rsaPub.N,
+		E: rsaPub.E,
+	}
+
+	return jwt.NewVerifierRS(jwt.RS256, &key)
+}
+
+type IsuportsClaim struct {
+	jwt.RegisteredClaims
+	Role string `json:"role"`
+}
+
+func parseTokenHandler(c echo.Context) error {
+	var tokenBody TokenBody
+	err := c.Bind(&tokenBody)
+	if err != nil {
+		c.Logger().Errorf("bad request, error: %s", err.Error())
+		return echo.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("bad request"),
+		)
+	}
+	var isuportsClaim IsuportsClaim
+	err = jwt.ParseClaims([]byte(tokenBody.Value), isuoprtsVerifier, &isuportsClaim)
+	if err != nil {
+		c.Logger().Errorf("error jwt.ParseClaims. err: %s, token: %s", err.Error(), tokenBody.Value)
+		return echo.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("invalid token"),
+		)
+	}
+
+	return c.JSON(http.StatusOK, isuportsClaim)
+}
+
+var validateEndpoint string
+
+type TokenBody struct {
+	Value string `json:"value"`
+}
+
+func parseToken(tokenStr string) (*IsuportsClaim, error) {
+	// 半分だけ別のサーバーで受け持つ
+	thisServer := make(chan struct{}, 1)
+	thisServer2 := make(chan struct{}, 1)
+	anotherServer := make(chan struct{}, 1)
+
+	thisServer <- struct{}{}
+	thisServer2 <- struct{}{}
+	anotherServer <- struct{}{}
+
+	var isuportsClaim IsuportsClaim
+	select {
+	case <-thisServer:
+		err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+		if err != nil {
+			return nil, err
+		}
+	case <-thisServer2:
+		err := jwt.ParseClaims([]byte(tokenStr), isuoprtsVerifier, &isuportsClaim)
+		if err != nil {
+			return nil, err
+		}
+	case <-anotherServer:
+		tokenBody := TokenBody{Value: tokenStr}
+		marshalled, err := json.Marshal(tokenBody)
+		req, err := http.NewRequest("POST", validateEndpoint, strings.NewReader(string(marshalled)))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		res, err := httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("invalid token: status: %d", res.StatusCode)
+		}
+		resBody, err := io.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+		err = json.Unmarshal(resBody, &isuportsClaim)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &isuportsClaim, nil
+}
+
 // リクエストヘッダをパースしてViewerを返す
 func parseViewer(c echo.Context) (*Viewer, error) {
 	cookie, err := c.Request().Cookie(cookieName)
@@ -344,42 +534,27 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 		)
 	}
 	tokenStr := cookie.Value
-
-	keyFilename := getEnv("ISUCON_JWT_KEY_FILE", "../public.pem")
-	keysrc, err := os.ReadFile(keyFilename)
-	if err != nil {
-		return nil, fmt.Errorf("error os.ReadFile: keyFilename=%s: %w", keyFilename, err)
-	}
-	key, _, err := jwk.DecodePEM(keysrc)
-	if err != nil {
-		return nil, fmt.Errorf("error jwk.DecodePEM: %w", err)
-	}
-
-	token, err := jwt.Parse(
-		[]byte(tokenStr),
-		jwt.WithKey(jwa.RS256, key),
-	)
+	isuportsClaim, err := parseToken(tokenStr)
 	if err != nil {
 		return nil, echo.NewHTTPError(http.StatusUnauthorized, fmt.Errorf("error jwt.Parse: %s", err.Error()))
 	}
-	if token.Subject() == "" {
+	if isuportsClaim.ExpiresAt.Before(time.Now()) {
+		return nil, echo.NewHTTPError(
+			http.StatusUnauthorized,
+			fmt.Sprintf("jwt has been expired. %v", isuportsClaim.ExpiresAt),
+		)
+	}
+	if isuportsClaim.Subject == "" {
 		return nil, echo.NewHTTPError(
 			http.StatusUnauthorized,
 			fmt.Sprintf("invalid token: subject is not found in token: %s", tokenStr),
 		)
 	}
 
-	var role string
-	tr, ok := token.Get("role")
-	if !ok {
-		return nil, echo.NewHTTPError(
-			http.StatusUnauthorized,
-			fmt.Sprintf("invalid token: role is not found: %s", tokenStr),
-		)
-	}
-	switch tr {
+	role := isuportsClaim.Role
+	switch role {
 	case RoleAdmin, RoleOrganizer, RolePlayer:
-		role = tr.(string)
+		break
 	default:
 		return nil, echo.NewHTTPError(
 			http.StatusUnauthorized,
@@ -387,7 +562,7 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 		)
 	}
 	// aud は1要素でテナント名がはいっている
-	aud := token.Audience()
+	aud := isuportsClaim.Audience
 	if len(aud) != 1 {
 		return nil, echo.NewHTTPError(
 			http.StatusUnauthorized,
@@ -414,7 +589,7 @@ func parseViewer(c echo.Context) (*Viewer, error) {
 
 	v := &Viewer{
 		role:       role,
-		playerID:   token.Subject(),
+		playerID:   isuportsClaim.Subject,
 		tenantName: tenant.Name,
 		tenantID:   tenant.ID,
 	}
@@ -512,6 +687,11 @@ type CompetitionRow struct {
 	UpdatedAt    int64         `db:"updated_at"`
 }
 
+type CompetitionIDTitle struct {
+	ID    string `db:"id"`
+	Title string `db:"title"`
+}
+
 // 大会を取得する
 func retrieveCompetition(ctx context.Context, id string) (*CompetitionRow, error) {
 	var c CompetitionRow
@@ -532,11 +712,10 @@ type PlayerScoreRow struct {
 	UpdatedAt     int64  `db:"updated_at"`
 }
 
-type PlayerScorePlayerRow struct {
-	PlayerID    string `db:"player_id"`
-	Score       int64  `db:"score"`
-	RowNum      int64  `db:"row_num"`
-	DisplayName string `db:"display_name"`
+type PlayerIDScoreRowNum struct {
+	PlayerID string `db:"player_id"`
+	Score    int64  `db:"score"`
+	RowNum   int64  `db:"row_num"`
 }
 
 type TenantsAddHandlerResult struct {
@@ -986,7 +1165,7 @@ func competitionFinishHandler(c echo.Context) error {
 	if err := adminDB.SelectContext(
 		ctx,
 		&vhs,
-		"SELECT player_id, MIN(created_at) AS min_created_at FROM visit_history WHERE tenant_id = ? AND competition_id = ? GROUP BY player_id",
+		"SELECT player_id, created_at AS min_created_at FROM visit_history WHERE tenant_id = ? AND competition_id = ?",
 		v.tenantID,
 		id,
 	); err != nil && err != sql.ErrNoRows {
@@ -1194,11 +1373,15 @@ func competitionScoreHandler(c echo.Context) error {
 			tx.Rollback()
 			return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
 		}
-		if _, err := tx.Exec(stmt, valueArgs...); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error bulk insert player_scores: %w", err)
+		if CSVRows != 0 {
+			if _, err := tx.Exec(stmt, valueArgs...); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("error bulk insert player_scores: %w", err)
+			}
 		}
 		tx.Commit()
+		now := time.Now()
+		lastScorePostTimeCache.Store(competitionID, now)
 		return nil
 	}()
 	if err != nil {
@@ -1304,18 +1487,32 @@ type CompetitionScoreRow struct {
 	Score int64  `db:"score"`
 }
 
-func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]CompetitionRow, error) {
-	cs := []CompetitionRow{}
+func retrieveCompetitionRows(ctx context.Context, tenantID int64) ([]CompetitionIDTitle, error) {
+	cs := []CompetitionIDTitle{}
 	if err := adminDB.SelectContext(
 		ctx,
 		&cs,
-		"SELECT * FROM competition WHERE tenant_id=? ORDER BY created_at DESC",
+		"SELECT id, title FROM competition WHERE tenant_id=? ORDER BY created_at DESC",
 		tenantID,
 	); err != nil {
 		return nil, fmt.Errorf("error Select competition: %w", err)
 	}
 	return cs, nil
 }
+
+var isuportsSG singleflight.Group
+
+type PlayerScoreRowReduced struct {
+	PlayerID      string `db:"player_id"`
+	CompetitionID string `db:"competition_id"`
+	Score         int64  `db:"score"`
+}
+
+var (
+	playerHandlerCacheHitCount           int
+	playerHandlerCacheMissCount          int
+	missingCompetitionInBeforeCacheCount int
+)
 
 // 参加者向けAPI
 // GET /api/player/player/:player_id
@@ -1347,44 +1544,89 @@ func playerHandler(c echo.Context) error {
 		// 存在しないプレイヤー
 		return echo.NewHTTPError(http.StatusNotFound, "player not found")
 	}
-	cs, err := retrieveCompetitionRows(ctx, v.tenantID)
+
+	key := fmt.Sprintf("tenant_id:%d", v.tenantID)
+	value, err, _ := isuportsSG.Do(key, func() (interface{}, error) {
+		return retrieveCompetitionRows(ctx, v.tenantID)
+	})
 	if err != nil {
 		return err
 	}
+	cs := value.([]CompetitionIDTitle)
 
+	canUseCache := true
+	beforePsMap, cachedTime, found := playerScoreDetailCache.Load(p.ID)
+	if !found {
+		beforePsMap = make(map[string]PlayerScoreDetail, len(cs))
+		canUseCache = false
+	}
 	compIDs := make([]string, 0, len(cs))
 	compIDTitleMap := map[string]string{}
-	for _, c := range cs {
-		compIDs = append(compIDs, c.ID)
-		compIDTitleMap[c.ID] = c.Title
-	}
-
-	pss := []PlayerScoreRow{}
-	whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
-	query := fmt.Sprintf("SELECT * FROM player_score WHERE tenant_id = ? AND competition_id IN (%s) AND player_id = ?", whereInPlaceholder)
-	args := make([]interface{}, 0, len(compIDs)+2)
-	args = append(args, v.tenantID)
-	for _, compID := range compIDs {
-		args = append(args, compID)
-	}
-	args = append(args, p.ID)
-	if err := scoreDB.SelectContext(
-		ctx,
-		&pss,
-		query,
-		args...,
-	); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("error Select player_scores: %w", err)
+	toRespSlice := make([]PlayerScoreDetail, 0, len(cs))
+	if canUseCache {
+		for _, c := range cs {
+			if lastScorePostTime, found := lastScorePostTimeCache.Load(c.ID); found && cachedTime.Before(lastScorePostTime) {
+				// その大会のスコアが更新されているのでキャッシュを使えない
+				compIDs = append(compIDs, c.ID)
+				compIDTitleMap[c.ID] = c.Title
+			} else {
+				// その大会のスコアが更新されていないのでキャッシュを使える
+				psd, found := beforePsMap[c.ID]
+				if !found {
+					// その大会のスコアは更新されていないが、キャッシュにデータが存在しない -> その大会のスコアが存在しない
+					missingCompetitionInBeforeCacheCount++
+					continue
+				}
+				// レスポンス用
+				toRespSlice = append(toRespSlice, psd)
+			}
+		}
+	} else {
+		for _, c := range cs {
+			compIDs = append(compIDs, c.ID)
+			compIDTitleMap[c.ID] = c.Title
 		}
 	}
 
-	psds := make([]PlayerScoreDetail, 0, len(pss))
-	for _, ps := range pss {
-		psds = append(psds, PlayerScoreDetail{
-			CompetitionTitle: compIDTitleMap[ps.CompetitionID],
-			Score:            ps.Score,
-		})
+	var scores []PlayerScoreDetail
+
+	if len(compIDs) == 0 {
+		scores = toRespSlice
+	} else {
+		pss := []PlayerScoreRowReduced{}
+		whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
+		cachedTime := time.Now()
+		query := fmt.Sprintf("SELECT player_id, competition_id, score FROM player_score WHERE tenant_id = ? AND competition_id IN (%s) AND player_id = ?", whereInPlaceholder)
+		args := make([]interface{}, 0, len(compIDs)+2)
+		args = append(args, v.tenantID)
+		for _, compID := range compIDs {
+			args = append(args, compID)
+		}
+		args = append(args, p.ID)
+		if err := scoreDB.SelectContext(
+			ctx,
+			&pss,
+			query,
+			args...,
+		); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("error Select player_scores: %w", err)
+			}
+		}
+
+		psds := make([]PlayerScoreDetail, 0, len(pss))
+		for _, ps := range pss {
+			psd := PlayerScoreDetail{
+				CompetitionTitle: compIDTitleMap[ps.CompetitionID],
+				Score:            ps.Score,
+			}
+			psds = append(psds, psd)
+
+			beforePsMap[ps.CompetitionID] = psd
+		}
+
+		playerScoreDetailCache.Store(p.ID, beforePsMap, cachedTime)
+		scores = append(toRespSlice, psds...)
 	}
 
 	res := SuccessResult{
@@ -1395,7 +1637,7 @@ func playerHandler(c echo.Context) error {
 				DisplayName:    p.DisplayName,
 				IsDisqualified: p.IsDisqualified,
 			},
-			Scores: psds,
+			Scores: scores,
 		},
 	}
 	return c.JSON(http.StatusOK, res)
@@ -1451,15 +1693,17 @@ func competitionRankingHandler(c echo.Context) error {
 		return fmt.Errorf("error Select tenant: id=%d, %w", v.tenantID, err)
 	}
 
-	if _, err := adminDB.ExecContext(
-		ctx,
-		"INSERT INTO visit_history (player_id, tenant_id, competition_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		v.playerID, tenant.ID, competitionID, now, now,
-	); err != nil {
-		return fmt.Errorf(
-			"error Insert visit_history: playerID=%s, tenantID=%d, competitionID=%s, createdAt=%d, updatedAt=%d, %w",
-			v.playerID, tenant.ID, competitionID, now, now, err,
-		)
+	if !competition.FinishedAt.Valid {
+		if _, err := adminDB.ExecContext(
+			ctx,
+			"INSERT INTO visit_history (player_id, tenant_id, competition_id, created_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE player_id = player_id",
+			v.playerID, tenant.ID, competitionID, now,
+		); err != nil {
+			return fmt.Errorf(
+				"error Insert visit_history: playerID=%s, tenantID=%d, competitionID=%s, createdAt=%d, updatedAt=%d, %w",
+				v.playerID, tenant.ID, competitionID, now, now, err,
+			)
+		}
 	}
 
 	var rankAfter int64
@@ -1474,14 +1718,11 @@ func competitionRankingHandler(c echo.Context) error {
 	ranks, found, expired := rankingCache.LoadRankingCache(competitionID)
 	if !found || expired {
 		query := `
-		SELECT ps.score, ps.player_id, ps.row_num, p.display_name
-		FROM player p
-		JOIN player_score ps
-			ON ps.tenant_id = ?
-			AND ps.competition_id = ?
-			AND ps.player_id = p.id
+		SELECT score, player_id, row_num
+		FROM player_score 
+		WHERE tenant_id = ? AND competition_id = ?
 		`
-		pss := []PlayerScorePlayerRow{}
+		pss := []PlayerIDScoreRowNum{}
 		err = func() error {
 			if err := scoreDB.SelectContext(
 				ctx,
@@ -1499,10 +1740,12 @@ func competitionRankingHandler(c echo.Context) error {
 		}
 		ranks = make([]CompetitionRank, 0, len(pss))
 		for _, ps := range pss {
+			// 見つからないことは考慮しなくていい
+			p, _ := playerCache.LoadPlayerCache(ps.PlayerID)
 			ranks = append(ranks, CompetitionRank{
 				Score:             ps.Score,
 				PlayerID:          ps.PlayerID,
-				PlayerDisplayName: ps.DisplayName,
+				PlayerDisplayName: p.DisplayName,
 				RowNum:            ps.RowNum,
 			})
 		}
@@ -1714,7 +1957,6 @@ func initializeHandler(c echo.Context) error {
 	ctx := context.Background()
 
 	// playerCacheに初期データを保存する
-	// initializeで終わらせたいので同期的に処理する
 	var pls []PlayerRow
 	if err := scoreDB.SelectContext(
 		ctx,
@@ -1723,7 +1965,16 @@ func initializeHandler(c echo.Context) error {
 	); err != nil {
 		return fmt.Errorf("error Select player: %w", err)
 	}
-	go func() {
+	for _, p := range pls {
+		playerCache.StorePlayerCache(PlayerDetail{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			IsDisqualified: p.IsDisqualified,
+		})
+	}
+
+	// rankingCacheに初期データを保存する
+	func() {
 		cs := []CompetitionRow{}
 		if err := adminDB.SelectContext(
 			ctx,
@@ -1734,59 +1985,86 @@ func initializeHandler(c echo.Context) error {
 			return
 		}
 
+		var chunkedCompIDs [][]string
+
+		chunkSize := 100
+
+		compIDs := make([]string, 0, len(cs))
 		for _, comp := range cs {
-			pss := []PlayerScoreRow{}
+			compIDs = append(compIDs, comp.ID)
+		}
+		for i := 0; i < len(compIDs); i += chunkSize {
+			end := i + chunkSize
+
+			if end > len(cs) {
+				end = len(cs)
+			}
+
+			chunkedCompIDs = append(chunkedCompIDs, compIDs[i:end])
+		}
+
+		for _, compIDs := range chunkedCompIDs {
+			whereInPlaceholder := strings.Repeat("?,", len(compIDs)-1) + "?"
+			query := fmt.Sprintf("SELECT * FROM player_score WHERE competition_id IN (%s)", whereInPlaceholder)
+			args := make([]interface{}, 0, len(compIDs))
+			for _, compID := range compIDs {
+				args = append(args, compID)
+			}
+			// pssにはいろんなcompetitionのplayer_scoreが入っている
+			pss := make([]PlayerScoreRow, 0, len(compIDs)*100)
 			if err := scoreDB.SelectContext(
 				ctx,
 				&pss,
-				"SELECT * FROM player_score WHERE competition_id  = ?",
-				comp.ID,
+				query,
+				args...,
 			); err != nil {
 				if !errors.Is(err, sql.ErrNoRows) {
 					c.Logger().Errorf("error Select player_scores: %w", err)
 					return
 				}
 			}
-
-			go func(pss []PlayerScoreRow, comp CompetitionRow) {
-				ranks := make([]CompetitionRank, 0, len(pss))
-				for _, ps := range pss {
-					player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
-					ranks = append(ranks, CompetitionRank{
-						Score:             ps.Score,
-						PlayerID:          ps.PlayerID,
-						PlayerDisplayName: player.DisplayName,
-						RowNum:            ps.RowNum,
-					})
+			// competitionごとにplayer_scoreを分ける
+			compIDToPlayerScoreRows := make(map[string][]PlayerScoreRow, len(compIDs))
+			for _, ps := range pss {
+				if _, found := compIDToPlayerScoreRows[ps.CompetitionID]; !found {
+					compIDToPlayerScoreRows[ps.CompetitionID] = make([]PlayerScoreRow, 0, 100)
 				}
-				sort.Slice(ranks, func(i, j int) bool {
-					if ranks[i].Score == ranks[j].Score {
-						return ranks[i].RowNum < ranks[j].RowNum
+				compIDToPlayerScoreRows[ps.CompetitionID] = append(compIDToPlayerScoreRows[ps.CompetitionID], ps)
+			}
+			for compID, pss := range compIDToPlayerScoreRows {
+				func(pss []PlayerScoreRow, comp string) {
+					ranks := make([]CompetitionRank, 0, len(pss))
+					for _, ps := range pss {
+						player, _ := playerCache.LoadPlayerCache(ps.PlayerID)
+						ranks = append(ranks, CompetitionRank{
+							Score:             ps.Score,
+							PlayerID:          ps.PlayerID,
+							PlayerDisplayName: player.DisplayName,
+							RowNum:            ps.RowNum,
+						})
 					}
-					return ranks[i].Score > ranks[j].Score
-				})
-				pagedRanks := make([]CompetitionRank, 0, len(pss))
-				for i, rank := range ranks {
-					pagedRanks = append(pagedRanks, CompetitionRank{
-						Rank:              int64(i + 1),
-						Score:             rank.Score,
-						PlayerID:          rank.PlayerID,
-						PlayerDisplayName: rank.PlayerDisplayName,
+					sort.Slice(ranks, func(i, j int) bool {
+						if ranks[i].Score == ranks[j].Score {
+							return ranks[i].RowNum < ranks[j].RowNum
+						}
+						return ranks[i].Score > ranks[j].Score
 					})
-				}
+					pagedRanks := make([]CompetitionRank, 0, len(pss))
+					for i, rank := range ranks {
+						pagedRanks = append(pagedRanks, CompetitionRank{
+							Rank:              int64(i + 1),
+							Score:             rank.Score,
+							PlayerID:          rank.PlayerID,
+							PlayerDisplayName: rank.PlayerDisplayName,
+						})
+					}
 
-				rankingCache.StoreDBUpdateTime(comp.ID, time.Now().Add(-time.Second)) // store cacheするときより前ならなんでもいい
-				rankingCache.StoreRankingCache(comp.ID, pagedRanks, time.Now())
-			}(pss, comp)
+					rankingCache.StoreDBUpdateTime(compID, time.Now().Add(-time.Second)) // store cacheするときより前ならなんでもいい
+					rankingCache.StoreRankingCache(compID, pagedRanks, time.Now())
+				}(pss, compID)
+			}
 		}
 	}()
-	for _, p := range pls {
-		playerCache.StorePlayerCache(PlayerDetail{
-			ID:             p.ID,
-			DisplayName:    p.DisplayName,
-			IsDisqualified: p.IsDisqualified,
-		})
-	}
 
 	res := InitializeHandlerResult{
 		Lang: "go",
@@ -1795,8 +2073,11 @@ func initializeHandler(c echo.Context) error {
 }
 
 type DeveloperInfo struct {
-	LoadRankingCacheCallCount      int `json:"load_ranking_cache_call_count"`
-	LoadValidRankingCacheCallCount int `json:"load_valid_ranking_cache_call_count"`
+	LoadRankingCacheCallCount            int `json:"load_ranking_cache_call_count"`
+	LoadValidRankingCacheCallCount       int `json:"load_valid_ranking_cache_call_count"`
+	PlayerHanderCacheHitCount            int `json:"player_hander_cache_hit_count"`
+	PlayerHanderCacheMissCount           int `json:"player_hander_cache_miss_count"`
+	MissingCompetitionInBeforeCacheCount int `json:"missing_competition_in_before_cache_count"`
 }
 
 // 開発者向けAPI
@@ -1805,8 +2086,11 @@ type DeveloperInfo struct {
 // 知りたいデータを返す
 func developerInfoHandler(c echo.Context) error {
 	res := DeveloperInfo{
-		LoadRankingCacheCallCount:      loadRankingCacheCallCount,
-		LoadValidRankingCacheCallCount: loadValidRankingCacheCallCount,
+		LoadRankingCacheCallCount:            loadRankingCacheCallCount,
+		LoadValidRankingCacheCallCount:       loadValidRankingCacheCallCount,
+		PlayerHanderCacheHitCount:            playerHandlerCacheHitCount,
+		PlayerHanderCacheMissCount:           playerHandlerCacheMissCount,
+		MissingCompetitionInBeforeCacheCount: missingCompetitionInBeforeCacheCount,
 	}
 	return c.JSON(http.StatusOK, SuccessResult{Status: true, Data: res})
 }
