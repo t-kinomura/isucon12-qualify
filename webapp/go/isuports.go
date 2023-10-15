@@ -446,7 +446,8 @@ type IsuportsClaim struct {
 
 func parseTokenHandler(c echo.Context) error {
 	var tokenBody TokenBody
-	err := c.Bind(&tokenBody); if err != nil {
+	err := c.Bind(&tokenBody)
+	if err != nil {
 		c.Logger().Errorf("bad request, error: %s", err.Error())
 		return echo.NewHTTPError(
 			http.StatusBadRequest,
@@ -1692,15 +1693,17 @@ func competitionRankingHandler(c echo.Context) error {
 		return fmt.Errorf("error Select tenant: id=%d, %w", v.tenantID, err)
 	}
 
-	if _, err := adminDB.ExecContext(
-		ctx,
-		"INSERT INTO visit_history (player_id, tenant_id, competition_id, created_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE player_id = player_id",
-		v.playerID, tenant.ID, competitionID, now,
-	); err != nil {
-		return fmt.Errorf(
-			"error Insert visit_history: playerID=%s, tenantID=%d, competitionID=%s, createdAt=%d, updatedAt=%d, %w",
-			v.playerID, tenant.ID, competitionID, now, now, err,
-		)
+	if !competition.FinishedAt.Valid {
+		if _, err := adminDB.ExecContext(
+			ctx,
+			"INSERT INTO visit_history (player_id, tenant_id, competition_id, created_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE player_id = player_id",
+			v.playerID, tenant.ID, competitionID, now,
+		); err != nil {
+			return fmt.Errorf(
+				"error Insert visit_history: playerID=%s, tenantID=%d, competitionID=%s, createdAt=%d, updatedAt=%d, %w",
+				v.playerID, tenant.ID, competitionID, now, now, err,
+			)
+		}
 	}
 
 	var rankAfter int64
