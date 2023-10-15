@@ -1164,7 +1164,7 @@ func competitionFinishHandler(c echo.Context) error {
 	if err := adminDB.SelectContext(
 		ctx,
 		&vhs,
-		"SELECT player_id, MIN(created_at) AS min_created_at FROM visit_history WHERE tenant_id = ? AND competition_id = ? GROUP BY player_id",
+		"SELECT player_id, created_at AS min_created_at FROM visit_history WHERE tenant_id = ? AND competition_id = ?",
 		v.tenantID,
 		id,
 	); err != nil && err != sql.ErrNoRows {
@@ -1694,8 +1694,8 @@ func competitionRankingHandler(c echo.Context) error {
 
 	if _, err := adminDB.ExecContext(
 		ctx,
-		"INSERT INTO visit_history (player_id, tenant_id, competition_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		v.playerID, tenant.ID, competitionID, now, now,
+		"INSERT INTO visit_history (player_id, tenant_id, competition_id, created_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE player_id = player_id",
+		v.playerID, tenant.ID, competitionID, now,
 	); err != nil {
 		return fmt.Errorf(
 			"error Insert visit_history: playerID=%s, tenantID=%d, competitionID=%s, createdAt=%d, updatedAt=%d, %w",
